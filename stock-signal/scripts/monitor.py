@@ -132,11 +132,28 @@ def eval_stock(s, q, ma5, state, alerts):
                 "**%s %s 涨停·一致加速兑现提醒**\n现价 %s 触及涨停 %s\n"
                 "战法: 卖在一致——涨停/缩量加速是兑现点。策略：%s"
                 % (name, code, fmt(q["price"]), fmt(lu), s["strategy"]))
-        if q["high"] >= ref * 1.05 and q["price"] <= q["high"] * 0.97 and alert_once(state, code, "profit_fallback"):
+        fell = q["high"] >= ref * 1.05 and q["price"] <= q["high"] * 0.97
+        if fell and alert_once(state, code, "profit_fallback"):
             alerts.append(
                 "**%s %s 冲高回落·兑现提醒**\n日内高点 %s 回落逾3%%至 %s\n"
                 "按 plan 兑现规则减仓/清仓。策略：%s"
                 % (name, code, fmt(q["high"]), fmt(q["price"]), s["strategy"]))
+        elif not fell and q["price"] >= ref * 1.05 and not (lu and q["price"] >= lu * 0.998):
+            prev_vol = 0.0
+            try:
+                prev_vol = quotes.fetch_prev_volume(code) or 0.0
+            except Exception:
+                pass
+            vol_ok = prev_vol <= 0 or q.get("volume", 0.0) >= prev_vol * 0.5
+            if vol_ok and alert_once(state, code, "add_pos"):
+                add_pct = s.get("add_size_pct", 5)
+                sh = shares_for(q["price"], add_pct)
+                alerts.append(
+                    "**加仓提醒 | %s %s**\n现价 %s 浮盈 %.1f%% 且有量(当日量≥昨日五成)\n"
+                    "可金字塔加 %.1f成≈%d股(约%d元)，加后单票≤2成\n"
+                    "注意: 一致加速(涨停/一字)是兑现点不加仓；加仓后 --mode buy --price 新均价 --size 更新登记"
+                    % (name, code, fmt(q["price"]), (q["price"] / ref - 1) * 100,
+                       add_pct / 10.0, sh or 0, int((sh or 0) * q["price"])))
         return
 
     # ---- 买入观察：低吸型（5日线±band） ----
@@ -226,6 +243,29 @@ def push_or_log(msg):
     print(("已推送(%s)" % detail) if ok else ("推送失败: %s" % detail))
     return ok
 
+def check_risk_off(state, alerts):
+    """大盘退潮预警: 炸板率≥30% / 高度板较前日降≥2 / 跌停≥20 → 减仓提醒（仅持仓时调用）"""
+    try:
+        em = market.emotion()
+        if "error" in em:
+            return
+        prev_max = 0
+        prev_d = market.prev_trading_date(em["date"])
+        if prev_d:
+            prev_max = market.emotion(prev_d).get("max_lb", 0)
+        reasons = []
+        if em["zb_rate"] >= 30:
+            reasons.append("炸板率%.1f%%≥30%%" % em["zb_rate"])
+        if prev_max and em["max_lb"] <= prev_max - 2:
+            reasons.append("最高连板%d→%d" % (prev_max, em["max_lb"]))
+        if em["dt"] >= 20:
+            reasons.append("跌停%d家" % em["dt"])
+        if reasons and alert_once(state, "market", "risk_off"):
+            alerts.append("**\u26a0\ufe0f 大盘退潮预警**\n%s\n按纪律: 持仓全部减半或清仓、停止新开仓，等情绪企稳"
+                          % "；".join(reasons))
+    except Exception:
+        pass
+
 def mode_test():
     msg = ("**stock-signal 链路测试**\n如果你看到这条消息，说明 A股提醒 -> 飞书 推送正常。\n"
            "计划标的: " + ", ".join(s["name"] for s in load_plan()) + "\n时间: " + now().strftime("%F %T"))
@@ -272,6 +312,8 @@ def mode_intraday():
         return  # 非交易日/非交易时段/无行情
     state = load_json(STATE_PATH, {})
     alerts = []
+    if any(s.get("ref_price") for s in plan):
+        check_risk_off(state, alerts)
     for s in plan:
         q = qs.get(s["code"])
         if not q:
@@ -312,7 +354,7 @@ def mode_close():
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
 
-def mode_buy(code, price):
+def mode_buy(code, price, size=None):
     plan = load_json(PLAN_PATH, None) or {"watchlist": []}
     for s in plan.get("watchlist", []):
         if s["code"] == code:
@@ -320,6 +362,8 @@ def mode_buy(code, price):
     else:
         sys.exit("plan.json 中没有 " + code)
     s["ref_price"] = price
+    if size:
+        s["buy_size_pct"] = size
     save_json(PLAN_PATH, plan)
     stop = price * (1 - s.get("stop_loss_pct", 6) / 100.0)
     msg = ("**持仓登记 | %s %s**\n买入价 %.2f 已写入 plan.json\n"
@@ -343,6 +387,7 @@ if __name__ == "__main__":
                     choices=["test", "once", "auction", "intraday", "close", "buy", "sell"])
     ap.add_argument("--code", help="buy/sell 用: 如 sz002185")
     ap.add_argument("--price", type=float, help="buy 用: 实际买入价")
+    ap.add_argument("--size", type=int, help="buy 用: 更新该票仓位百分比(如5=0.5成)")
     ap.add_argument("--force", action="store_true", help="忽略时段/交易日限制(自测)")
     a = ap.parse_args()
     if a.force:
@@ -350,7 +395,7 @@ if __name__ == "__main__":
     if a.mode == "buy":
         if not a.code or not a.price:
             sys.exit("用法: --mode buy --code sz002185 --price 17.80")
-        mode_buy(a.code, a.price)
+        mode_buy(a.code, a.price, a.size)
     elif a.mode == "sell":
         if not a.code:
             sys.exit("用法: --mode sell --code sz002185")

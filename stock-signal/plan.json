@@ -16,14 +16,15 @@
       "action": "buy_watch",
       "buy_anchor": "ma5",
       "buy_band_pct": 1.0,
-      "buy_size_pct": 10,
+      "buy_size_pct": 5,
       "stop_loss_pct": 6,
       "ref_price": null,
       "take_profit": {
         "type": "limit_up_or_fallback",
         "fallback_pct": 3
       },
-      "enabled": true
+      "enabled": true,
+      "add_size_pct": 5
     },
     {
       "code": "sz001216",
@@ -38,14 +39,15 @@
         "after_time": "10:00",
         "price_above_open_pct": 1.0
       },
-      "buy_size_pct": 10,
+      "buy_size_pct": 5,
       "stop_loss_pct": 6,
       "ref_price": null,
       "take_profit": {
         "type": "limit_up_or_fallback",
         "fallback_pct": 3
       },
-      "enabled": true
+      "enabled": true,
+      "add_size_pct": 5
     }
   ]
 }

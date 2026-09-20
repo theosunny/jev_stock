@@ -29,6 +29,7 @@ def fetch_quotes(codes):
             "limit_down": float(f[48]) if f[48] else None,
             "vwap": (round(float(f[37]) * 100 / float(f[36]), 3)
                      if f[36] and float(f[36]) > 0 and f[37] else None),
+            "volume": float(f[36]) if f[36] else 0.0,
             "time": f[30],
         }
     return out
@@ -44,3 +45,14 @@ def fetch_ma5(code):
         return None
     tail = closes[-5:]
     return sum(tail) / len(tail)
+
+
+def fetch_prev_volume(code):
+    """上一交易日成交量(股)，用于放量判断"""
+    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + code + ",day,,,8,qfq"
+    data = json.loads(_get(url).decode("utf-8", "ignore"))
+    d = data.get("data", {}).get(code, {})
+    rows = d.get("qfqday") or d.get("day") or []
+    if len(rows) >= 2:
+        return float(rows[-2][5])
+    return None

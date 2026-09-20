@@ -33,6 +33,15 @@ def _latest_trading_date(max_back=7):
             return d
     return None
 
+def prev_trading_date(before, max_back=10):
+    """早于 before(YYYYMMDD) 的最近有涨停数据的交易日"""
+    base = dt.datetime.strptime(before, "%Y%m%d").date()
+    for i in range(1, max_back + 1):
+        d = (base - dt.timedelta(days=i)).strftime("%Y%m%d")
+        if _pool("ZT", d):
+            return d
+    return None
+
 def emotion(date=None):
     """date: YYYYMMDD 或 None(自动最近交易日)。返回情绪概览 dict"""
     date = date or _latest_trading_date()
