@@ -18,6 +18,7 @@ cd jev_stock && ./install.sh
 |---|---|---|
 | Python 3（仅标准库） | 全部脚本 | ✅ |
 | [lark-cli](https://feishu.cn)（登录后 `lark-cli auth status` 查 openId） | 飞书推送 | 推送功能需要 |
+| 微信通道（任选一）：Server酱 / PushPlus / 企业微信机器人 / WxPusher | 微信推送 | 可选，填 .env 即启用 |
 | TypeSafe API Key（.env） | Jev 深度判断 | 可选，规则监控不依赖 |
 | 腾讯行情 + 东财情绪/板块接口 | 数据源 | 免费，无需 key |
 
@@ -34,6 +35,17 @@ cd jev_stock && ./install.sh
 - **买入/清仓登记**：`python3 <skill>/scripts/monitor.py --mode buy --code sz002185 --price 17.80`（自动算止损价并推送回执）
 - **Claude 深度分析**：情绪周期定位、标的买点判定（`jev_analyze.py`，choice/noul/score 三类结构化问题）
 - **数据目录可移植**：默认在 skill 目录；设 `STOCK_DATA_DIR` 或写 `scripts/.data_dir` 可把数据放到任意位置
+
+## 微信推送配置（任选其一，填 .env 即启用，可与飞书同时收）
+
+| 通道 | 获取方式 | 费用/限制 | 消息在哪看 |
+|---|---|---|---|
+| **Server酱** | 微信扫码 https://sct.ftqq.com 拿 SendKey → `SERVERCHAN_SENDKEY=` | 免费5条/天，更多¥4.9/月 | 微信「Server酱」服务号 |
+| **PushPlus** | 微信扫码 https://www.pushplus.plus 拿 token → `PUSHPLUS_TOKEN=` | 免费额度较大，偶尔限流 | 微信公众号 |
+| **企业微信机器人** | 企业微信建群→群设置→机器人→复制webhook → `WECOM_WEBHOOK_URL=` | 免费、无条数限制 | 企业微信 App（可开通知） |
+| **WxPusher** | https://wxpusher.zjiecode.com 注册应用 → `WXPUSHER_APP_TOKEN=` + `WXPUSHER_UID=` | 免费 | 微信公众号 |
+
+填好后验证：`python3 scripts/monitor.py --mode test`（显示 `已推送(feishu(bot)+serverchan)` 即多通道生效）
 
 ## 交易计划（plan.json）
 

@@ -12,4 +12,7 @@ def data_dir():
         v = open(marker, encoding="utf-8").read().strip()
         if v:
             return v
+    parent = os.path.dirname(here)
+    if os.path.exists(os.path.join(parent, "SKILL.md")):  # 便携安装: 数据在技能根目录
+        return parent
     return here
