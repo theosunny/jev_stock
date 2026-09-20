@@ -58,13 +58,13 @@ def emotion(date=None):
     return {"date": date, "zt": len(zt), "zb": len(zb), "dt": len(dtp),
             "zb_rate": zb_rate, "max_lb": max(lbs) if lbs else 0, "ladder": ladder}
 
-def emotion_line(date=None):
-    """一行式情绪摘要，直接用于推送"""
+def emotion_line(date=None, label=""):
+    """一行式情绪摘要，label如"昨日"用于开盘首小时"""
     em = emotion(date)
     if "error" in em:
         return ""
     lad = " ".join("%d板x%d" % (lb, len(ns)) for lb, ns in sorted(em["ladder"].items(), reverse=True)[:4])
-    s = "情绪: 涨停%d 炸板%d(率%s%%) 跌停%d 最高%d板" % (
+    s = label + "情绪: 涨停%d 炸板%d(率%s%%) 跌停%d 最高%d板" % (
         em["zt"], em["zb"], em["zb_rate"], em["dt"], em["max_lb"])
     if lad:
         s += " | " + lad
@@ -94,9 +94,9 @@ def sector_heat(date=None, top=5):
     heat = Counter(p.get("hybk", "其他") for p in _pool("ZT", date))
     return heat.most_common(top)
 
-def heat_line(date=None, top=5):
+def heat_line(date=None, top=5, label=""):
     rows = sector_heat(date, top)
-    return "涨停分布: " + " ".join("%s%d家" % (n, c) for n, c in rows) if rows else ""
+    return label + "涨停分布: " + " ".join("%s%d家" % (n, c) for n, c in rows) if rows else ""
 
 def sector_line(top=3, kind=2, label="行业"):
     rows = sectors(top, kind)
@@ -114,3 +114,79 @@ def stock_industry(code):
         return {"industry": d.get("f127")}
     except Exception:
         return {}
+
+
+def sector_zt_count(industry, date=None):
+    """某行业当日涨停家数（主线联动过滤用）。失败返回None"""
+    if not industry:
+        return None
+    date = date or _latest_trading_date()
+    if not date:
+        return None
+    try:
+        return sum(1 for p in _pool("ZT", date) if p.get("hybk") == industry)
+    except Exception:
+        return None
+
+
+_RISK_KW = ("减持", "立案", "调查", "预亏", "亏损", "停牌", "退市", "质押",
+            "违规", "警示", "监管", "处罚", "诉讼", "仲裁", "终止", "问询")
+_GOOD_KW = ("增持", "回购", "中标", "预增", "扭亏", "签订", "收购", "战略合作")
+
+def _get_gbk(url, timeout=10):
+    req = urllib.request.Request(url, headers=_UA)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("gbk", "ignore")
+
+def announcements(code):
+    """个股近1日公告扫描（东财接口）。code: 002185。返回 {risk:[], good:[]}"""
+    sym = code[2:] if code[:2] in ("sz", "sh") else code
+    url = ("https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=6"
+           "&page_index=1&ann_type=A&client_source=web&stock_list=" + sym)
+    out = {"risk": [], "good": []}
+    try:
+        rows = (_get_json(url).get("data") or {}).get("list") or []
+    except Exception:
+        return out
+    import datetime as _dt
+    cutoff = (_dt.date.today() - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    for r in rows[:6]:
+        t, when = (r.get("title") or ""), (r.get("notime") or "")[:10]
+        if when < cutoff:
+            continue
+        if any(k in t for k in _RISK_KW):
+            out["risk"].append(t)
+        elif any(k in t for k in _GOOD_KW):
+            out["good"].append(t)
+    return out
+
+def overnight_line():
+    """隔夜外盘: 纳指/恒生(腾讯) + A50期货(新浪)。失败返回空串"""
+    import re as _re
+    parts = []
+    try:
+        raw = _get_gbk("https://qt.gtimg.cn/q=usIXIC,hkHSI")
+        for m in _re.finditer(r'v_(\w+)="([^"]*)"', raw):
+            f = m.group(2).split("~")
+            if len(f) > 33 and f[32]:
+                parts.append("%s%+.1f%%" % (f[1], float(f[32])))
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(
+            "https://hq.sinajs.cn/list=hf_CHA50CFD",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            raw = r.read().decode("gbk", "ignore")
+        d = raw.split('"')[1].split(",")
+        cur, prev = float(d[0]), float(d[4])
+        if prev > 0:
+            parts.append("A50%+.2f%%" % ((cur / prev - 1) * 100))
+    except Exception:
+        pass
+    if not parts:
+        return ""
+    s = "隔夜: " + " ".join(parts[:3])
+    if any("纳指" in p and float(p.replace("%", "").replace("纳指", "").replace("+", "")) <= -2 for p in parts):
+        s += " " + chr(92) + "u26a0" + chr(92) + "ufe0f纳指大跌，竞价注意低开风险"
+    return s

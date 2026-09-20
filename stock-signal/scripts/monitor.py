@@ -12,7 +12,7 @@
 import argparse, datetime as dt, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import datadir, market, push, quotes
+import datadir, execution, market, push, quotes
 
 DATA = datadir.data_dir()
 PLAN_PATH = os.path.join(DATA, "plan.json")
@@ -42,7 +42,18 @@ def save_json(path, obj):
         json.dump(obj, f, ensure_ascii=False, indent=1)
 
 def load_plan():
-    plan = load_json(PLAN_PATH, {"watchlist": []})
+    try:
+        with open(PLAN_PATH, encoding="utf-8") as f:
+            plan = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        try:
+            if not os.environ.get("NO_PUSH"):
+                push.send_markdown("**\u26a0\ufe0f plan.json 损坏**\n%s\n监控已跳过本次执行，请修复后再交易" % e)
+        except Exception:
+            pass
+        raise SystemExit(1)
     return [s for s in plan.get("watchlist", []) if s.get("enabled")]
 
 def plan_capital():
@@ -57,6 +68,12 @@ def shares_for(price, pct):
         return None
     budget = plan_capital() * pct / 100.0
     return int(budget // (price * 100)) * 100
+
+def vol_ratio_threshold():
+    """加仓量比时间归一: 10:00需昨日量20% -> 15:00需100%"""
+    t = now()
+    mins = max(0, min(330, (t.hour * 60 + t.minute) - (9 * 60 + 30)))
+    return 0.2 + (mins / 330.0) * 0.8
 
 def position_summary():
     plan = load_json(PLAN_PATH, {})
@@ -91,15 +108,29 @@ def buy_points_lines(plan, qs, ma5s):
 
 def market_lines():
     out = []
-    for f in (market.emotion_line, market.heat_line,
-              lambda: market.sector_line(3, 2, "行业"),
-              lambda: market.sector_line(3, 3, "概念")):
-        try:
-            t = f()
-        except Exception:
-            t = ""
+    d, lab = None, ""
+    if now().time() < dt.time(10, 0):  # 开盘首小时当日池数据不全，用昨日完整数据
+        d = market.prev_trading_date(now().strftime("%Y%m%d"))
+        lab = "昨日"
+    try:
+        t = market.emotion_line(d, lab)
         if t:
             out.append(t)
+    except Exception:
+        pass
+    try:
+        t = market.heat_line(d, label=lab)
+        if t:
+            out.append(t)
+    except Exception:
+        pass
+    for kind, name in ((2, "行业"), (3, "概念")):
+        try:
+            t = market.sector_line(3, kind, name)
+            if t:
+                out.append(t)
+        except Exception:
+            pass
     return out
 
 def alert_once(state, code, kind):
@@ -144,17 +175,34 @@ def eval_stock(s, q, ma5, state, alerts):
                 prev_vol = quotes.fetch_prev_volume(code) or 0.0
             except Exception:
                 pass
-            vol_ok = prev_vol <= 0 or q.get("volume", 0.0) >= prev_vol * 0.5
+            thr = vol_ratio_threshold()
+            vol_ok = prev_vol <= 0 or q.get("volume", 0.0) >= prev_vol * thr
             if vol_ok and alert_once(state, code, "add_pos"):
                 add_pct = s.get("add_size_pct", 5)
                 sh = shares_for(q["price"], add_pct)
                 alerts.append(
-                    "**加仓提醒 | %s %s**\n现价 %s 浮盈 %.1f%% 且有量(当日量≥昨日五成)\n"
+                    "**加仓提醒 | %s %s**\n现价 %s 浮盈 %.1f%% 且有量(需达昨日量%d%%)\n"
                     "可金字塔加 %.1f成≈%d股(约%d元)，加后单票≤2成\n"
                     "注意: 一致加速(涨停/一字)是兑现点不加仓；加仓后 --mode buy --price 新均价 --size 更新登记"
-                    % (name, code, fmt(q["price"]), (q["price"] / ref - 1) * 100,
+                    % (name, code, fmt(q["price"]), (q["price"] / ref - 1) * 100, int(thr * 100),
                        add_pct / 10.0, sh or 0, int((sh or 0) * q["price"])))
         return
+
+    # ---- 板块联动过滤（主线退潮则降级为观察） ----
+    ind, zt_cnt, sec_tag = "", None, ""
+    try:
+        ind = market.stock_industry(code).get("industry") or ""
+    except Exception:
+        pass
+    if ind:
+        try:
+            zt_cnt = market.sector_zt_count(ind)
+        except Exception:
+            zt_cnt = None
+    if zt_cnt == 0:
+        sec_tag = " \u26a0\ufe0f板块[%s]今日0涨停·主线退潮，建议观望" % ind
+    elif zt_cnt:
+        sec_tag = "（板块[%s]涨停%d家）" % (ind, zt_cnt)
 
     # ---- 买入观察：低吸型（5日线±band） ----
     if s.get("buy_anchor") == "ma5" and ma5:
@@ -163,15 +211,23 @@ def eval_stock(s, q, ma5, state, alerts):
         if lo <= q["price"] <= hi and alert_once(state, code, "buy_zone"):
             alerts.append(
                 "**买入提醒 | %s %s**\n现价 %s 进入低吸区 %s-%s（MA5≈%s）\n"
-                "策略: %s | 建议仓位: %.1f成试错≈%s股(约%s元)\n"
+                "策略: %s%s | 建议仓位: %.1f成试错≈%s股(约%s元)\n"
                 "止损: 买入价-%s%%(-约%s元) | 兑现: 涨停或冲高回落>3%%\n"
                 "注意: 若高开>5%%或放量大跌破位则放弃"
                 % (name, code, fmt(q["price"]), fmt(lo), fmt(hi), fmt(ma5),
-                   s["strategy"], s.get("buy_size_pct", 10) / 10.0,
+                   s["strategy"], sec_tag, s.get("buy_size_pct", 10) / 10.0,
                    shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0,
                    int((shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0) * (lo + hi) / 2.0),
                    s.get("stop_loss_pct", 6),
                    int((shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0) * (lo + hi) / 2.0 * s.get("stop_loss_pct", 6) / 100.0)))
+            try:
+                rec, _why = execution.execute_buy(code, name, q["price"],
+                                                 shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0)
+                if rec:
+                    alerts.append("[paper] 模拟委托已登记 %d股@%s（真实执行需miniQMT+熔断验证）"
+                                  % (rec["shares"], fmt(rec["price"])))
+            except Exception:
+                pass
 
     # ---- 买入观察：弱转强确认型 ----
     c = s.get("confirm")
@@ -183,17 +239,32 @@ def eval_stock(s, q, ma5, state, alerts):
         if q.get("vwap"):
             strong = strong and q["price"] >= q["vwap"]  # 站稳分时均价(VWAP)
         lo_p, hi_p = c["open_pct_range"]
-        if lo_p <= op <= hi_p and after and strong and alert_once(state, code, "confirm"):
+        high_ok = lo_p <= op <= hi_p and after and strong
+        low_ok = False
+        lw = c.get("low_open")
+        if lw and after and q.get("vwap"):
+            llo, lhi = lw["open_pct_range"]
+            low_ok = (llo <= op <= lhi and q["price"] >= q["vwap"]
+                      and q["price"] >= q["prev_close"])  # 低开回升翻红站稳VWAP
+        if (high_ok or low_ok) and alert_once(state, code, "confirm"):
+            how = ("竞价高开 %.1f%%（要求 %s-%s%%）" % (op, lo_p, hi_p)) if high_ok else ("低开 %.1f%% 回升翻红" % op)
             alerts.append(
-                "**弱转强确认 | %s %s**\n竞价高开 %.1f%%（要求 %s-%s%%），现价 %s 站稳开盘价上方\n"
-                "策略: %s | 建议: 小仓位%.1f成≈%s股(约%s元)，跌破分时均线/开盘价放弃\n"
+                "**弱转强确认 | %s %s**\n%s，现价 %s 站稳VWAP %s\n"
+                "策略: %s%s | 建议: 小仓位%.1f成≈%s股(约%s元)，跌破分时均线/开盘价放弃\n"
                 "止损: -%s%%"
-                % (name, code, op, lo_p, hi_p, fmt(q["price"]),
-                   s["strategy"], s.get("buy_size_pct", 10) / 10.0,
+                % (name, code, how, fmt(q["price"]), fmt(q.get("vwap")),
+                   s["strategy"], sec_tag, s.get("buy_size_pct", 10) / 10.0,
                    shares_for(q["price"], s.get("buy_size_pct", 10)) or 0,
                    int((shares_for(q["price"], s.get("buy_size_pct", 10)) or 0) * q["price"]),
                    s.get("stop_loss_pct", 6)))
-
+            try:
+                rec, _why = execution.execute_buy(code, name, q["price"],
+                                                 shares_for(q["price"], s.get("buy_size_pct", 10)) or 0)
+                if rec:
+                    alerts.append("[paper] 模拟委托已登记 %d股@%s（真实执行需miniQMT+熔断验证）"
+                                  % (rec["shares"], fmt(rec["price"])))
+            except Exception:
+                pass
 def snapshot():
     plan = load_plan()
     codes = [s["code"] for s in plan]
@@ -266,6 +337,28 @@ def check_risk_off(state, alerts):
     except Exception:
         pass
 
+def mode_heartbeat():
+    """9:25 心跳: 你收不到这条=系统挂了（Mac睡眠/网络/cron问题）"""
+    state = load_json(STATE_PATH, {})
+    if not alert_once(state, "market", "heartbeat"):
+        return
+    plan = load_plan()
+    held = [s for s in plan if s.get("ref_price")]
+    lines = ["**\U0001F49B 监控在线 %s**" % today(),
+             "watchlist %d 只，持仓 %d 只" % (len(plan), len(held)),
+             position_summary()]
+    if plan:
+        try:
+            _, qs, ma5s = snapshot()
+            pts = buy_points_lines(plan, qs, ma5s)
+            if pts:
+                lines += pts
+        except Exception:
+            pass
+    save_json(STATE_PATH, state)
+    push_or_log("\n".join(lines))
+
+
 def mode_test():
     msg = ("**stock-signal 链路测试**\n如果你看到这条消息，说明 A股提醒 -> 飞书 推送正常。\n"
            "计划标的: " + ", ".join(s["name"] for s in load_plan()) + "\n时间: " + now().strftime("%F %T"))
@@ -283,6 +376,24 @@ def mode_auction():
         return
     lines = ["**竞价概览 %s**" % today()]
     lines += market_lines()
+    try:
+        t = market.overnight_line()
+        if t:
+            lines.append(t)
+    except Exception:
+        pass
+    ann_parts = []
+    for s in plan:
+        try:
+            a = market.announcements(s["code"])
+            if a.get("risk"):
+                ann_parts.append("%s \u26a0\ufe0f%s" % (s["name"], ";".join(a["risk"][:2])))
+            elif a.get("good"):
+                ann_parts.append("%s \u2726%s" % (s["name"], ";".join(a["good"][:1])))
+        except Exception:
+            pass
+    if ann_parts:
+        lines.append("公告: " + " | ".join(ann_parts))
     for s in plan:
         q = qs.get(s["code"])
         if not q:
@@ -384,7 +495,7 @@ def mode_sell(code):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", required=True,
-                    choices=["test", "once", "auction", "intraday", "close", "buy", "sell"])
+                    choices=["test", "once", "auction", "intraday", "close", "buy", "sell", "heartbeat"])
     ap.add_argument("--code", help="buy/sell 用: 如 sz002185")
     ap.add_argument("--price", type=float, help="buy 用: 实际买入价")
     ap.add_argument("--size", type=int, help="buy 用: 更新该票仓位百分比(如5=0.5成)")
@@ -402,4 +513,5 @@ if __name__ == "__main__":
         mode_sell(a.code)
     else:
         {"test": mode_test, "once": mode_once, "auction": mode_auction,
-         "intraday": mode_intraday, "close": mode_close}[a.mode]()
+         "intraday": mode_intraday, "close": mode_close,
+         "heartbeat": mode_heartbeat}[a.mode]()
