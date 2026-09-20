@@ -45,6 +45,19 @@ def load_plan():
     plan = load_json(PLAN_PATH, {"watchlist": []})
     return [s for s in plan.get("watchlist", []) if s.get("enabled")]
 
+def plan_capital():
+    try:
+        return float(load_json(PLAN_PATH, {}).get("总资金", 100000))
+    except Exception:
+        return 100000.0
+
+def shares_for(price, pct):
+    """按预算与价格算A股整数股（100股一手）"""
+    if not price:
+        return None
+    budget = plan_capital() * pct / 100.0
+    return int(budget // (price * 100)) * 100
+
 def position_summary():
     plan = load_json(PLAN_PATH, {})
     cap = plan.get("总仓位上限pct", 30)
@@ -52,7 +65,8 @@ def position_summary():
     used = sum(x[1] for x in held)
     names = "\u3001".join(n for n, _ in held) or "空仓"
     warn = " \u26a0\ufe0f超上限" if used > cap else ""
-    return "仓位: %s | 已用%d%%/上限%d%%%s" % (names, used, cap, warn)
+    m = plan_capital() / 10000.0
+    return "仓位: %s | 已用%d%%(%.1f万)/上限%d%%(%.1f万)%s" % (names, used, used * m / 100.0, cap, cap * m / 100.0, warn)
 
 def buy_points_lines(plan, qs, ma5s):
     lines = []
@@ -62,11 +76,17 @@ def buy_points_lines(plan, qs, ma5s):
         if s.get("buy_anchor") == "ma5" and ma5s.get(s["code"]):
             ma5 = ma5s[s["code"]]
             band = s.get("buy_band_pct", 1.0) / 100.0
-            lines.append("- %s 低吸区 %.2f-%.2f (MA5 %.2f)" % (
-                s["name"], ma5 * (1 - band), ma5 * (1 + band), ma5))
+            lo, hi = ma5 * (1 - band), ma5 * (1 + band)
+            pct = s.get("buy_size_pct", 10)
+            sh = shares_for((lo + hi) / 2.0, pct)
+            lines.append("- %s 低吸区 %.2f-%.2f (MA5 %.2f) | %.1f成≈%d股/约%.0f元" % (
+                s["name"], lo, hi, ma5, pct / 10.0, sh or 0,
+                (sh or 0) * (lo + hi) / 2.0))
         elif s.get("confirm"):
             lo_p, hi_p = s["confirm"]["open_pct_range"]
-            lines.append("- %s 弱转强: 高开%d-%d%%后站稳VWAP" % (s["name"], lo_p, hi_p))
+            lines.append("- %s 弱转强: 高开%d-%d%%后站稳VWAP | %.1f成预算≈%.0f元" % (
+                s["name"], lo_p, hi_p, s.get("buy_size_pct", 10) / 10.0,
+                plan_capital() * s.get("buy_size_pct", 10) / 100.0))
     return lines
 
 def market_lines():
@@ -126,11 +146,15 @@ def eval_stock(s, q, ma5, state, alerts):
         if lo <= q["price"] <= hi and alert_once(state, code, "buy_zone"):
             alerts.append(
                 "**买入提醒 | %s %s**\n现价 %s 进入低吸区 %s-%s（MA5≈%s）\n"
-                "策略: %s | 建议仓位: %s成试错\n"
-                "止损: 买入价-%s%% | 兑现: 涨停或冲高回落>3%%\n"
+                "策略: %s | 建议仓位: %.1f成试错≈%s股(约%s元)\n"
+                "止损: 买入价-%s%%(-约%s元) | 兑现: 涨停或冲高回落>3%%\n"
                 "注意: 若高开>5%%或放量大跌破位则放弃"
                 % (name, code, fmt(q["price"]), fmt(lo), fmt(hi), fmt(ma5),
-                   s["strategy"], s.get("buy_size_pct", 10), s.get("stop_loss_pct", 6)))
+                   s["strategy"], s.get("buy_size_pct", 10) / 10.0,
+                   shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0,
+                   int((shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0) * (lo + hi) / 2.0),
+                   s.get("stop_loss_pct", 6),
+                   int((shares_for((lo + hi) / 2.0, s.get("buy_size_pct", 10)) or 0) * (lo + hi) / 2.0 * s.get("stop_loss_pct", 6) / 100.0)))
 
     # ---- 买入观察：弱转强确认型 ----
     c = s.get("confirm")
@@ -145,10 +169,13 @@ def eval_stock(s, q, ma5, state, alerts):
         if lo_p <= op <= hi_p and after and strong and alert_once(state, code, "confirm"):
             alerts.append(
                 "**弱转强确认 | %s %s**\n竞价高开 %.1f%%（要求 %s-%s%%），现价 %s 站稳开盘价上方\n"
-                "策略: %s | 建议: 小仓位%s成试错，跌破分时均线/开盘价放弃\n"
+                "策略: %s | 建议: 小仓位%.1f成≈%s股(约%s元)，跌破分时均线/开盘价放弃\n"
                 "止损: -%s%%"
                 % (name, code, op, lo_p, hi_p, fmt(q["price"]),
-                   s["strategy"], s.get("buy_size_pct", 10), s.get("stop_loss_pct", 6)))
+                   s["strategy"], s.get("buy_size_pct", 10) / 10.0,
+                   shares_for(q["price"], s.get("buy_size_pct", 10)) or 0,
+                   int((shares_for(q["price"], s.get("buy_size_pct", 10)) or 0) * q["price"]),
+                   s.get("stop_loss_pct", 6)))
 
 def snapshot():
     plan = load_plan()

@@ -1,50 +1,51 @@
 {
- "as_of": "2026-09-20",
- "总仓位上限pct": 30,
- "纪律": [
-  "情绪高潮/分歧期总仓位<=3成",
-  "单票试错仓<=1成，确认后最多加至2成",
-  "止损-6%或买入逻辑破坏(断板/炸板/破5日线)当日必须离场",
-  "买在分歧卖在一致；一致加速(缩量涨停/一字)是兑现点不是买入点"
- ],
- "watchlist": [
-  {
-   "code": "sz002185",
-   "name": "华天科技",
-   "strategy": "陈小群·主线中军分歧低吸",
-   "action": "buy_watch",
-   "buy_anchor": "ma5",
-   "buy_band_pct": 1.0,
-   "buy_size_pct": 10,
-   "stop_loss_pct": 6,
-   "ref_price": null,
-   "take_profit": {
-    "type": "limit_up_or_fallback",
-    "fallback_pct": 3
-   },
-   "enabled": true
-  },
-  {
-   "code": "sz001216",
-   "name": "华瓷股份",
-   "strategy": "小鳄鱼·二板弱转强确认",
-   "action": "buy_watch",
-   "confirm": {
-    "open_pct_range": [
-     2,
-     5
-    ],
-    "after_time": "10:00",
-    "price_above_open_pct": 1.0
-   },
-   "buy_size_pct": 10,
-   "stop_loss_pct": 6,
-   "ref_price": null,
-   "take_profit": {
-    "type": "limit_up_or_fallback",
-    "fallback_pct": 3
-   },
-   "enabled": true
-  }
- ]
+  "as_of": "2026-09-20",
+  "总资金": 100000,
+  "总仓位上限pct": 30,
+  "纪律": [
+    "情绪高潮/分歧期总仓位<=3成",
+    "单票试错仓<=1成，确认后最多加至2成",
+    "止损-6%或买入逻辑破坏(断板/炸板/破5日线)当日必须离场",
+    "买在分歧卖在一致；一致加速(缩量涨停/一字)是兑现点不是买入点"
+  ],
+  "watchlist": [
+    {
+      "code": "sz002185",
+      "name": "华天科技",
+      "strategy": "陈小群·主线中军分歧低吸",
+      "action": "buy_watch",
+      "buy_anchor": "ma5",
+      "buy_band_pct": 1.0,
+      "buy_size_pct": 10,
+      "stop_loss_pct": 6,
+      "ref_price": null,
+      "take_profit": {
+        "type": "limit_up_or_fallback",
+        "fallback_pct": 3
+      },
+      "enabled": true
+    },
+    {
+      "code": "sz001216",
+      "name": "华瓷股份",
+      "strategy": "小鳄鱼·二板弱转强确认",
+      "action": "buy_watch",
+      "confirm": {
+        "open_pct_range": [
+          2,
+          5
+        ],
+        "after_time": "10:00",
+        "price_above_open_pct": 1.0
+      },
+      "buy_size_pct": 10,
+      "stop_loss_pct": 6,
+      "ref_price": null,
+      "take_profit": {
+        "type": "limit_up_or_fallback",
+        "fallback_pct": 3
+      },
+      "enabled": true
+    }
+  ]
 }
