@@ -1,0 +1,9 @@
+.env
+.data_dir
+.alert_state.json
+cron.log
+monday_snapshot.txt
+lark_qr.png
+jev_result.json
+__pycache__/
+*.pyc

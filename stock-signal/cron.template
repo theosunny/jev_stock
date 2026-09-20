@@ -1,0 +1,5 @@
+# 交易日定时监控（crontab -e 添加；把 <DATA> 换成你的数据目录、<PY> 换成 python3 绝对路径、<SKILL> 换成技能目录）
+16 9 * * 1-5 <PY> <SKILL>/scripts/monitor.py --mode auction >> <DATA>/cron.log 2>&1
+*/5 9-14 * * 1-5 <PY> <SKILL>/scripts/monitor.py --mode intraday >> <DATA>/cron.log 2>&1
+0 15 * * 1-5 <PY> <SKILL>/scripts/monitor.py --mode intraday >> <DATA>/cron.log 2>&1
+12 15 * * 1-5 <PY> <SKILL>/scripts/monitor.py --mode close >> <DATA>/cron.log 2>&1
