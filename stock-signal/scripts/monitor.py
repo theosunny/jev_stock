@@ -12,12 +12,13 @@
 import argparse, datetime as dt, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import datadir, push, quotes
+import datadir, market, push, quotes
 
 DATA = datadir.data_dir()
 PLAN_PATH = os.path.join(DATA, "plan.json")
 STATE_PATH = os.path.join(DATA, ".alert_state.json")
 SESSIONS = ((dt.time(9, 30), dt.time(11, 30)), (dt.time(13, 0), dt.time(15, 0)))
+FORCE = False  # --force 时忽略时段/交易日限制(自测)
 
 def now():
     return dt.datetime.now()
@@ -43,6 +44,43 @@ def save_json(path, obj):
 def load_plan():
     plan = load_json(PLAN_PATH, {"watchlist": []})
     return [s for s in plan.get("watchlist", []) if s.get("enabled")]
+
+def position_summary():
+    plan = load_json(PLAN_PATH, {})
+    cap = plan.get("总仓位上限pct", 30)
+    held = [(s["name"], s.get("buy_size_pct", 10)) for s in plan.get("watchlist", []) if s.get("ref_price")]
+    used = sum(x[1] for x in held)
+    names = "\u3001".join(n for n, _ in held) or "空仓"
+    warn = " \u26a0\ufe0f超上限" if used > cap else ""
+    return "仓位: %s | 已用%d%%/上限%d%%%s" % (names, used, cap, warn)
+
+def buy_points_lines(plan, qs, ma5s):
+    lines = []
+    for s in plan:
+        if s.get("ref_price") or not s.get("enabled", True):
+            continue
+        if s.get("buy_anchor") == "ma5" and ma5s.get(s["code"]):
+            ma5 = ma5s[s["code"]]
+            band = s.get("buy_band_pct", 1.0) / 100.0
+            lines.append("- %s 低吸区 %.2f-%.2f (MA5 %.2f)" % (
+                s["name"], ma5 * (1 - band), ma5 * (1 + band), ma5))
+        elif s.get("confirm"):
+            lo_p, hi_p = s["confirm"]["open_pct_range"]
+            lines.append("- %s 弱转强: 高开%d-%d%%后站稳VWAP" % (s["name"], lo_p, hi_p))
+    return lines
+
+def market_lines():
+    out = []
+    for f in (market.emotion_line, market.heat_line,
+              lambda: market.sector_line(3, 2, "行业"),
+              lambda: market.sector_line(3, 3, "概念")):
+        try:
+            t = f()
+        except Exception:
+            t = ""
+        if t:
+            out.append(t)
+    return out
 
 def alert_once(state, code, kind):
     """每票每类提醒每天只发一次。返回True=应当发送"""
@@ -131,14 +169,27 @@ def mode_once():
     if not plan:
         print("watchlist 为空")
         return
+    for line in market_lines():
+        print(line)
+    inds = {}
+    for s in plan:
+        try:
+            inds[s["code"]] = market.stock_industry(s["code"]).get("industry") or ""
+        except Exception:
+            inds[s["code"]] = ""
     for s in plan:
         q = qs.get(s["code"])
         if not q:
             print("%s: 行情获取失败" % s["code"])
             continue
-        print("%s %s | 现价 %.2f (%.2f%%) 开 %.2f 高 %.2f 低 %.2f | MA5 %s | 行情时间 %s | %s"
-              % (s["name"], s["code"], q["price"], q["pct"], q["open"], q["high"], q["low"],
-                 fmt(ma5s.get(s["code"])), q["time"], s["strategy"]))
+        print("%s %s[%s] | 现价 %.2f (%.2f%%) 开 %.2f VWAP %s | MA5 %s | %s | %s"
+              % (s["name"], s["code"], inds[s["code"]], q["price"], q["pct"], q["open"],
+                 fmt(q.get("vwap")), fmt(ma5s.get(s["code"])),
+                 ("持仓@%.2f" % s["ref_price"]) if s.get("ref_price") else "观察", s["strategy"]))
+    print(position_summary())
+    pts = buy_points_lines(plan, qs, ma5s)
+    if pts:
+        print("买点: " + "; ".join(x.lstrip("- ") for x in pts))
 
 def push_or_log(msg):
     if os.environ.get("NO_PUSH"):
@@ -154,16 +205,17 @@ def mode_test():
     push_or_log(msg)
 
 def mode_auction():
-    if not (dt.time(9, 14) <= now().time() <= dt.time(9, 30)):
+    if not FORCE and not (dt.time(9, 14) <= now().time() <= dt.time(9, 30)):
         return
     state = load_json(STATE_PATH, {})
     if not alert_once(state, "market", "auction"):
         return
-    plan, qs, _ = snapshot()
+    plan, qs, ma5s = snapshot()
     if not plan or not qs:
         save_json(STATE_PATH, state)
         return
     lines = ["**竞价概览 %s**" % today()]
+    lines += market_lines()
     for s in plan:
         q = qs.get(s["code"])
         if not q:
@@ -173,8 +225,13 @@ def mode_auction():
         c = s.get("confirm")
         if c:
             lo_p, hi_p = c["open_pct_range"]
-            tag = " 弱转强预备✓" if lo_p <= op <= hi_p else " 高开区间外，大概率放弃"
+            tag = " 弱转强预备" if lo_p <= op <= hi_p else " 高开区间外，大概率放弃"
         lines.append("- %s %s: 高开 %+.1f%%%s 现价 %s" % (s["name"], s["code"], op, tag, fmt(q["price"])))
+    pts = buy_points_lines(plan, qs, ma5s)
+    if pts:
+        lines.append("**今日买点**")
+        lines += pts
+    lines.append(position_summary())
     lines.append("提示: 高潮期若一致大幅高开，按战法只兑现不追。")
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
@@ -184,7 +241,7 @@ def mode_intraday():
     if not plan or not qs:
         return
     q0 = qs.get(plan[0]["code"])
-    if not q0 or q0["time"][:8] != now().strftime("%Y%m%d") or not in_session():
+    if not FORCE and (not q0 or q0["time"][:8] != now().strftime("%Y%m%d") or not in_session()):
         return  # 非交易日/非交易时段/无行情
     state = load_json(STATE_PATH, {})
     alerts = []
@@ -195,7 +252,7 @@ def mode_intraday():
         eval_stock(s, q, ma5s.get(s["code"]), state, alerts)
     if alerts:
         save_json(STATE_PATH, state)
-        push_or_log("\n".join(alerts) + "\n\n_" + now().strftime("%F %T") + "_")
+        push_or_log("\n".join(alerts) + "\n" + position_summary() + "\n\n_" + now().strftime("%F %T") + "_")
 
 def mode_close():
     state = load_json(STATE_PATH, {})
@@ -206,19 +263,25 @@ def mode_close():
         save_json(STATE_PATH, state)
         return
     q0 = qs.get(plan[0]["code"])
-    if not q0 or q0["time"][:8] != now().strftime("%Y%m%d"):
+    if not FORCE and (not q0 or q0["time"][:8] != now().strftime("%Y%m%d")):
         save_json(STATE_PATH, state)
         return
     lines = ["**收盘总结 %s**" % today()]
+    lines += market_lines()
     for s in plan:
         q = qs.get(s["code"])
         if not q:
             continue
         ma5 = ma5s.get(s["code"])
-        pos = "持仓 ref=%.2f" % s["ref_price"] if s.get("ref_price") else "观察中(未持仓)"
+        pos = "持仓@%.2f" % s["ref_price"] if s.get("ref_price") else "观察中"
         lines.append("- %s %s: 收 %.2f (%+.2f%%) MA5 %s | %s | %s"
                      % (s["name"], s["code"], q["price"], q["pct"], fmt(ma5), pos, s["strategy"]))
-    lines.append("买入后请把 plan.json 该票 ref_price 改为实际买入价，止损/兑现监控才会生效。")
+    lines.append(position_summary())
+    pts = buy_points_lines(plan, qs, ma5s)
+    if pts:
+        lines.append("**次日买点**")
+        lines += pts
+    lines.append("买入后: python3 monitor.py --mode buy --code 代码 --price 实际价")
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
 
@@ -235,7 +298,7 @@ def mode_buy(code, price):
     msg = ("**持仓登记 | %s %s**\n买入价 %.2f 已写入 plan.json\n"
            "止损价 %.2f (-%s%%，触发即提醒) | 兑现: 涨停或冲高回落>3%%\n策略: %s"
            % (s["name"], code, price, stop, s.get("stop_loss_pct", 6), s["strategy"]))
-    push_or_log(msg)
+    push_or_log(msg + "\n" + position_summary())
 
 def mode_sell(code):
     plan = load_json(PLAN_PATH, None) or {"watchlist": []}
@@ -253,7 +316,10 @@ if __name__ == "__main__":
                     choices=["test", "once", "auction", "intraday", "close", "buy", "sell"])
     ap.add_argument("--code", help="buy/sell 用: 如 sz002185")
     ap.add_argument("--price", type=float, help="buy 用: 实际买入价")
+    ap.add_argument("--force", action="store_true", help="忽略时段/交易日限制(自测)")
     a = ap.parse_args()
+    if a.force:
+        FORCE = True
     if a.mode == "buy":
         if not a.code or not a.price:
             sys.exit("用法: --mode buy --code sz002185 --price 17.80")
