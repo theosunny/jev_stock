@@ -38,6 +38,9 @@ def _feishu(text):
     env = dict(os.environ,
                LARKSUITE_CLI_NO_UPDATE_NOTIFIER="1",
                LARKSUITE_CLI_NO_SKILLS_NOTIFIER="1")
+    # cron 最小PATH下 env node 找不到node导致lark-cli执行失败 —— 注入lark-cli所在bin目录
+    bindir = os.path.dirname(_lark_bin())
+    env["PATH"] = bindir + ":/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin")
     for ident in ("bot", "user"):
         cmd = [_lark_bin(), "im", "+messages-send", "--as", ident,
                "--user-id", uid, "--markdown", text]

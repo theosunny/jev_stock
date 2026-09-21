@@ -311,7 +311,8 @@ def push_or_log(msg):
         print("[NO_PUSH]\n" + msg)
         return True
     ok, detail = push.send_markdown(msg)
-    print(("已推送(%s)" % detail) if ok else ("推送失败: %s" % detail))
+    print(("[%s] " % now().strftime("%F %T")) +
+          (("已推送(%s)" % detail) if ok else ("推送失败: %s" % detail)))
     return ok
 
 def check_risk_off(state, alerts):
