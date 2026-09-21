@@ -25,7 +25,7 @@ description: A股短线买点/平仓监控与飞书推送（陈小群/小鳄鱼�
 1. **快照**：`--mode once` 获取实时状态（含情绪面板/板块分布/个股行业/仓位/买点）
 2. **"分析/该不该买/选股"**：用最新行情与复盘更新 `jev_analyze.py` 的 state（市场状态/连板梯队/主线），运行之，读 jev_result.json，结合战法解读
 3. **改计划**：编辑 DATA_DIR/plan.json，改完 `--mode once` 验证
-4. **"我买入了X@价格Y"**：`--mode buy --code X --price Y`；清仓 `--mode sell --code X`
+4. **"我买了X"**：`--mode buy --code X`（价格省略=自动取实时价登记，报了价则 `--price Y`）；清仓 `--mode sell --code X`
 5. **测试推送**：`--mode test`
 6. **"周一校准"**：读 DATA_DIR/monday_snapshot.txt（若存在）更新 Jev state 重跑
 
