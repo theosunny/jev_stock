@@ -57,6 +57,68 @@
       },
       "enabled": true,
       "add_size_pct": 5
+    },
+    {
+      "code": "sh600664",
+      "name": "哈药股份",
+      "strategy": "小鳄鱼·医药主线首板次日弱转强",
+      "action": "buy_watch",
+      "confirm": {
+        "open_pct_range": [
+          2,
+          5
+        ],
+        "after_time": "10:00",
+        "price_above_open_pct": 1.0,
+        "low_open": {
+          "open_pct_range": [
+            -2,
+            2
+          ],
+          "after_time": "10:00"
+        }
+      },
+      "buy_size_pct": 5,
+      "add_size_pct": 5,
+      "stop_loss_pct": 6,
+      "ref_price": null,
+      "take_profit": {
+        "type": "limit_up_or_fallback",
+        "fallback_pct": 3
+      },
+      "enabled": true,
+      "note": "2026-09-21 医药链15家涨停聚集日加入观察; 哈药封单6.7亿/换手7.4%, 新华封单2.3亿/换手4.0%"
+    },
+    {
+      "code": "sz000756",
+      "name": "新华制药",
+      "strategy": "小鳄鱼·医药主线首板次日弱转强",
+      "action": "buy_watch",
+      "confirm": {
+        "open_pct_range": [
+          2,
+          5
+        ],
+        "after_time": "10:00",
+        "price_above_open_pct": 1.0,
+        "low_open": {
+          "open_pct_range": [
+            -2,
+            2
+          ],
+          "after_time": "10:00"
+        }
+      },
+      "buy_size_pct": 5,
+      "add_size_pct": 5,
+      "stop_loss_pct": 6,
+      "ref_price": null,
+      "take_profit": {
+        "type": "limit_up_or_fallback",
+        "fallback_pct": 3
+      },
+      "enabled": true,
+      "note": "2026-09-21 医药链15家涨停聚集日加入观察; 哈药封单6.7亿/换手7.4%, 新华封单2.3亿/换手4.0%"
     }
   ],
   "execution": {
