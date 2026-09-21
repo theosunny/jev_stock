@@ -12,7 +12,7 @@
 import argparse, datetime as dt, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import datadir, execution, market, push, quotes
+import datadir, execution, market, news, push, quotes
 
 DATA = datadir.data_dir()
 PLAN_PATH = os.path.join(DATA, "plan.json")
@@ -453,6 +453,10 @@ def mode_auction():
             pass
     if ann_parts:
         lines.append("公告: " + " | ".join(ann_parts))
+    try:
+        lines += news.news_lines([s["name"] for s in plan], top=4, hours=14, label="早间快讯")
+    except Exception:
+        pass
     for s in plan:
         q = qs.get(s["code"])
         if not q:
@@ -531,6 +535,10 @@ def mode_close():
     if pts:
         lines.append("**次日买点**")
         lines += pts
+    try:
+        lines += news.news_lines([s["name"] for s in plan], top=5, label="盘后快讯要点")
+    except Exception:
+        pass
     lines.append("买入后: python3 monitor.py --mode buy --code 代码 --price 实际价")
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
