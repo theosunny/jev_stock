@@ -360,8 +360,8 @@ def check_risk_off(state, alerts):
         pass
 
 def check_sector_eruption(state, alerts):
-    """板块爆发: 行业涨停家数较上次快照新增>=3家 -> 新主线候选提醒(只记录不追)"""
-    if now().time() < dt.time(9, 40):  # 避开开盘涨停池自然爬坡期
+    """板块聚集扫描: 当日基线累计+4(稳步爬升) 或 5分钟急速+3 -> 新主线候选提醒"""
+    if now().time() < dt.time(9, 40):
         return
     try:
         pool = market.zt_pool()
@@ -373,22 +373,26 @@ def check_sector_eruption(state, alerts):
                 cur.setdefault(ind, []).append((p.get("n", ""), int(p.get("lbc", 1))))
     except Exception:
         return
-    if len(pool) < 5 or not cur:  # 空池/半加载池视为失败，不动基线
+    if len(pool) < 5 or not cur:
         return
     snap = state.get("_sector_snap")
-    if not snap or snap.get("date") != day:  # 每日首跑只建基线
-        state["_sector_snap"] = {"date": day,
+    if not snap or snap.get("date") != day:
+        state["_sector_snap"] = {"date": day, "base": {k: len(v) for k, v in cur.items()},
                                  "counts": {k: len(v) for k, v in cur.items()},
                                  "names": {k: [n for n, _ in v] for k, v in cur.items()}}
         return
-    prev, prev_names = snap.get("counts", {}), snap.get("names", {})
+    base = snap.get("base") or snap.get("counts", {})
+    prev = snap.get("counts", {})
+    prev_names = snap.get("names", {})
     for ind, lst in cur.items():
-        delta = len(lst) - prev.get(ind, 0)
-        if delta >= 3 and alert_once(state, "erupt:" + ind, "x"):
+        day_gain = len(lst) - base.get(ind, 0)
+        fast = len(lst) - prev.get(ind, 0)
+        if (day_gain >= 4 or fast >= 3) and alert_once(state, "erupt:" + ind, "x"):
             firsts = [n for n, lb in lst if lb == 1][:4]
-            alerts.append("**\U0001F525 板块爆发 | %s**\n涨停家数 %d\u2192%d (+%d)\n首板: %s\n定位: 新主线候选——今日只记录观察，次日弱转强确认再评估(不追当日首板)"
-                            % (ind, prev.get(ind, 0), len(lst), delta, "/".join(firsts or [n for n, _ in lst][:4])))
-    state["_sector_snap"] = {"date": day,
+            alerts.append("**\U0001F525 板块聚集 | %s**\n当日涨停 %d\u2192%d (基线起+%d)\n首板: %s\n定位: 主线候选——记录观察, 次日弱转强确认再评估"
+                            % (ind, base.get(ind, 0), len(lst), day_gain,
+                               "/".join(firsts or [n for n, _ in lst][:4])))
+    state["_sector_snap"] = {"date": day, "base": base,
                              "counts": {k: len(v) for k, v in cur.items()},
                              "names": {k: [n for n, _ in v] for k, v in cur.items()}}
 
