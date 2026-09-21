@@ -24,7 +24,9 @@
         "fallback_pct": 3
       },
       "enabled": true,
-      "add_size_pct": 5
+      "add_size_pct": 5,
+      "buy_enabled": false,
+      "pause_reason": "2026-09-21 半导体主线轮出至医药(5家->2家); 重新激活条件: 半导体板块涨停>=4家 或 华天放量站稳VWAP且板块同步走强"
     },
     {
       "code": "sz001216",

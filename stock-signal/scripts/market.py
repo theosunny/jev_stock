@@ -196,3 +196,40 @@ def zt_pool(date=None):
     """涨停池原始列表（板块爆发扫描用）"""
     date = date or _latest_trading_date()
     return _pool("ZT", date) if date else []
+
+
+def is_ebb():
+    """退潮期判定(买入闸门): 炸板率>=25 或 高度板较前日降>=2 或 跌停>=10。
+    返回 (bool, reason)"""
+    try:
+        em = emotion()
+        if "error" in em:
+            return False, ""
+        # 开盘首小时池数据是小样本噪音(9:45炸板率27.5%的教训): 用昨日完整数据判定
+        if _dt.datetime.now().time() < _dt.time(10, 0) and em["date"] == _dt.datetime.now().strftime("%Y%m%d"):
+            prev_d = prev_trading_date(em["date"])
+            if prev_d:
+                em = emotion(prev_d)
+        reasons = []
+        if em["zb_rate"] >= 25:
+            reasons.append("炸板率%.1f%%" % em["zb_rate"])
+        prev_d = prev_trading_date(em["date"])
+        if prev_d:
+            pm = emotion(prev_d).get("max_lb", 0)
+            if pm and em["max_lb"] <= pm - 2:
+                reasons.append("高度板%d→%d" % (pm, em["max_lb"]))
+        if em["dt"] >= 10:
+            reasons.append("跌停%d家" % em["dt"])
+        return (bool(reasons), "; ".join(reasons))
+    except Exception:
+        return False, ""
+
+
+def sector_dist(date=None, top=8):
+    """涨停池行业分布(当前时刻)"""
+    from collections import Counter
+    date = date or _latest_trading_date()
+    if not date:
+        return []
+    heat = Counter(p.get("hybk", "其他") for p in _pool("ZT", date))
+    return heat.most_common(top)

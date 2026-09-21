@@ -144,7 +144,7 @@ def alert_once(state, code, kind):
 def fmt(x):
     return ("%.2f" % x) if x is not None else "-"
 
-def eval_stock(s, q, ma5, state, alerts):
+def eval_stock(s, q, ma5, state, alerts, buy_ok=True):
     code, name = s["code"], s["name"]
     ref = s.get("ref_price")
 
@@ -187,6 +187,9 @@ def eval_stock(s, q, ma5, state, alerts):
                     % (name, code, fmt(q["price"]), (q["price"] / ref - 1) * 100, int(thr * 100),
                        add_pct / 10.0, sh or 0, int((sh or 0) * q["price"])))
         return
+
+    if (not buy_ok or not s.get("buy_enabled", True)) and not s.get("ref_price"):
+        return  # 闸门: 退潮期(全局)或个股buy_enabled=false时, 暂停买入类提醒; 持仓监控照常
 
     # ---- 板块联动过滤（主线退潮则降级为观察） ----
     ind, zt_cnt, sec_tag = "", None, ""
@@ -462,6 +465,12 @@ def mode_auction():
         lines.append("**今日买点**")
         lines += pts
     lines.append(position_summary())
+    try:
+        ebb, ebb_why = market.is_ebb()
+        if ebb:
+            lines.append("退潮闸门: 买入提醒今日暂停(%s)，只观察不新开仓" % ebb_why)
+    except Exception:
+        pass
     lines.append("提示: 高潮期若一致大幅高开，按战法只兑现不追。")
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
@@ -477,12 +486,16 @@ def mode_intraday():
     alerts = []
     if any(s.get("ref_price") for s in plan):
         check_risk_off(state, alerts)
+    ebb, ebb_why = market.is_ebb()
+    buy_ok = not ebb
+    if ebb and alert_once(state, "market", "ebb_note"):
+        alerts.append("**退潮闸门生效**\n%s\n买入类提醒已自动暂停(低吸区/弱转强/接近预警)；恢复条件: 炸板率<25%%且高度板企稳回升。持仓监控(止损/兑现)不受影响" % ebb_why)
     check_sector_eruption(state, alerts)
     for s in plan:
         q = qs.get(s["code"])
         if not q:
             continue
-        eval_stock(s, q, ma5s.get(s["code"]), state, alerts)
+        eval_stock(s, q, ma5s.get(s["code"]), state, alerts, buy_ok=buy_ok)
     save_json(STATE_PATH, state)  # 快照/标志需持久化，每次都保存
     if alerts:
         push_or_log("\n".join(alerts) + "\n" + position_summary() + "\n\n_" + now().strftime("%F %T") + "_")
