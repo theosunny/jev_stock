@@ -518,13 +518,20 @@ def mode_close():
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
 
-def mode_buy(code, price, size=None):
+def mode_buy(code, price=None, size=None):
     plan = load_json(PLAN_PATH, None) or {"watchlist": []}
     for s in plan.get("watchlist", []):
         if s["code"] == code:
             break
     else:
         sys.exit("plan.json 中没有 " + code)
+    auto_note = ""
+    if price is None:  # 免价格登记: 取实时价
+        q = quotes.fetch_quotes([code]).get(code)
+        if not q:
+            sys.exit("未提供价格且实时行情获取失败")
+        price = q["price"]
+        auto_note = "\n(按实时价%.2f登记, 实际成交价不同请 --price 修正)" % price
     s["ref_price"] = price
     if size:
         s["buy_size_pct"] = size
@@ -533,7 +540,7 @@ def mode_buy(code, price, size=None):
     msg = ("**持仓登记 | %s %s**\n买入价 %.2f 已写入 plan.json\n"
            "止损价 %.2f (-%s%%，触发即提醒) | 兑现: 涨停或冲高回落>3%%\n策略: %s"
            % (s["name"], code, price, stop, s.get("stop_loss_pct", 6), s["strategy"]))
-    push_or_log(msg + "\n" + position_summary())
+    push_or_log(msg + auto_note + "\n" + position_summary())
 
 def mode_sell(code):
     plan = load_json(PLAN_PATH, None) or {"watchlist": []}
@@ -557,8 +564,8 @@ if __name__ == "__main__":
     if a.force:
         FORCE = True
     if a.mode == "buy":
-        if not a.code or not a.price:
-            sys.exit("用法: --mode buy --code sz002185 --price 17.80")
+        if not a.code:
+            sys.exit("用法: --mode buy --code sz002185 [--price 不填取实时价]")
         mode_buy(a.code, a.price, a.size)
     elif a.mode == "sell":
         if not a.code:
