@@ -190,3 +190,9 @@ def overnight_line():
     if any("纳指" in p and float(p.replace("%", "").replace("纳指", "").replace("+", "")) <= -2 for p in parts):
         s += " " + chr(92) + "u26a0" + chr(92) + "ufe0f纳指大跌，竞价注意低开风险"
     return s
+
+
+def zt_pool(date=None):
+    """涨停池原始列表（板块爆发扫描用）"""
+    date = date or _latest_trading_date()
+    return _pool("ZT", date) if date else []

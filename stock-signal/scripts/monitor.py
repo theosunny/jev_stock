@@ -204,6 +204,24 @@ def eval_stock(s, q, ma5, state, alerts):
     elif zt_cnt:
         sec_tag = "（板块[%s]涨停%d家）" % (ind, zt_cnt)
 
+    # ---- 盘中辅助信号：接近低吸区 / VWAP收复 ----
+    if s.get("buy_anchor") == "ma5" and ma5 and not s.get("ref_price"):
+        band0 = s.get("buy_band_pct", 1.0) / 100.0
+        lo0, hi0 = ma5 * (1 - band0), ma5 * (1 + band0)
+        if hi0 < q["price"] <= hi0 * 1.015 and alert_once(state, code, "approach"):
+            alerts.append("**接近低吸区 | %s %s**\n现价 %s 距低吸区上沿 %.2f 仅 %.1f%%\n准备信号(非买入): 跌入 %.2f-%.2f 才触发正式买入提醒"
+                            % (name, code, fmt(q["price"]), hi0,
+                               (q["price"] / hi0 - 1) * 100, lo0, hi0))
+    if not s.get("ref_price") and q.get("vwap") and now().time() >= dt.time(10, 0):
+        bk = "_vwap_below:" + code
+        if q["price"] < q["vwap"] * 0.995:
+            state[bk] = True
+        elif state.get(bk) and q["price"] >= q["vwap"] * 1.005:
+            state[bk] = False
+            if alert_once(state, code, "vwap_reclaim"):
+                alerts.append("**VWAP收复 | %s %s**\n现价 %s 站回分时均价 %s 之上\n盘中企稳信号——量能请自行确认；低吸型仍以低吸区为准，弱转强型此为确认信号之一"
+                                % (name, code, fmt(q["price"]), fmt(q["vwap"])))
+
     # ---- 买入观察：低吸型（5日线±band） ----
     if s.get("buy_anchor") == "ma5" and ma5:
         band = s.get("buy_band_pct", 1.0) / 100.0
@@ -338,6 +356,39 @@ def check_risk_off(state, alerts):
     except Exception:
         pass
 
+def check_sector_eruption(state, alerts):
+    """板块爆发: 行业涨停家数较上次快照新增>=3家 -> 新主线候选提醒(只记录不追)"""
+    if now().time() < dt.time(9, 40):  # 避开开盘涨停池自然爬坡期
+        return
+    try:
+        pool = market.zt_pool()
+        day = now().strftime("%Y%m%d")
+        cur = {}
+        for p in pool:
+            ind = p.get("hybk")
+            if ind:
+                cur.setdefault(ind, []).append((p.get("n", ""), int(p.get("lbc", 1))))
+    except Exception:
+        return
+    if len(pool) < 5 or not cur:  # 空池/半加载池视为失败，不动基线
+        return
+    snap = state.get("_sector_snap")
+    if not snap or snap.get("date") != day:  # 每日首跑只建基线
+        state["_sector_snap"] = {"date": day,
+                                 "counts": {k: len(v) for k, v in cur.items()},
+                                 "names": {k: [n for n, _ in v] for k, v in cur.items()}}
+        return
+    prev, prev_names = snap.get("counts", {}), snap.get("names", {})
+    for ind, lst in cur.items():
+        delta = len(lst) - prev.get(ind, 0)
+        if delta >= 3 and alert_once(state, "erupt:" + ind, "x"):
+            firsts = [n for n, lb in lst if lb == 1][:4]
+            alerts.append("**\U0001F525 板块爆发 | %s**\n涨停家数 %d\u2192%d (+%d)\n首板: %s\n定位: 新主线候选——今日只记录观察，次日弱转强确认再评估(不追当日首板)"
+                            % (ind, prev.get(ind, 0), len(lst), delta, "/".join(firsts or [n for n, _ in lst][:4])))
+    state["_sector_snap"] = {"date": day,
+                             "counts": {k: len(v) for k, v in cur.items()},
+                             "names": {k: [n for n, _ in v] for k, v in cur.items()}}
+
 def mode_heartbeat():
     """9:25 心跳: 你收不到这条=系统挂了（Mac睡眠/网络/cron问题）"""
     state = load_json(STATE_PATH, {})
@@ -426,13 +477,14 @@ def mode_intraday():
     alerts = []
     if any(s.get("ref_price") for s in plan):
         check_risk_off(state, alerts)
+    check_sector_eruption(state, alerts)
     for s in plan:
         q = qs.get(s["code"])
         if not q:
             continue
         eval_stock(s, q, ma5s.get(s["code"]), state, alerts)
+    save_json(STATE_PATH, state)  # 快照/标志需持久化，每次都保存
     if alerts:
-        save_json(STATE_PATH, state)
         push_or_log("\n".join(alerts) + "\n" + position_summary() + "\n\n_" + now().strftime("%F %T") + "_")
 
 def mode_close():
