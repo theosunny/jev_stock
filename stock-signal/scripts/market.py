@@ -206,7 +206,7 @@ def is_ebb():
         if "error" in em:
             return False, ""
         # 开盘首小时池数据是小样本噪音(9:45炸板率27.5%的教训): 用昨日完整数据判定
-        if _dt.datetime.now().time() < _dt.time(10, 0) and em["date"] == _dt.datetime.now().strftime("%Y%m%d"):
+        if dt.datetime.now().time() < dt.time(10, 0) and em["date"] == dt.datetime.now().strftime("%Y%m%d"):
             prev_d = prev_trading_date(em["date"])
             if prev_d:
                 em = emotion(prev_d)
@@ -221,8 +221,8 @@ def is_ebb():
         if em["dt"] >= 10:
             reasons.append("跌停%d家" % em["dt"])
         return (bool(reasons), "; ".join(reasons))
-    except Exception:
-        return False, ""
+    except Exception as e:
+        return True, "情绪数据获取异常，保守暂停(%s)" % str(e)[:40]
 
 
 def sector_dist(date=None, top=8):
