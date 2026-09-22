@@ -460,6 +460,49 @@ def send_feishu(root, report_id, now=None):
         return _ack_locked(root, report_id, 'feishu', result[1], now)
 
 
+def send_slack(root, report_id, now=None):
+    import slack_bot
+    now = now or now_cn()
+    if os.environ.get('NO_PUSH'):
+        return {'status': 'dry_run', 'report_id': report_id}
+    with lock(root):
+        state = load(folder(root) / 'state.json', {})
+        outstanding = state.get('unconfirmed', {}).get('slack')
+        if outstanding:
+            return {'status': 'needs_verification', 'report_id': outstanding, 'verify_channel': 'slack'}
+        record = read_record(root, report_id)
+        if 'slack' not in summary(record, now)['pending_channels']:
+            return {'status': 'skipped', 'report_id': report_id}
+        # Opening a DM sends no message. Persist its identity before claiming.
+        target = slack_bot.open_dm()
+        record = {**record, 'slack_transport': 'bot', 'slack_target': target}
+        write(record_path(root, report_id), record)
+        claimed = _claim_locked(root, report_id, 'slack', now)
+        if claimed['status'] != 'ready_to_send':
+            return claimed
+        result = slack_bot.send_once(record['message'], channel=target)
+        if not result.get('ok'):
+            return {'status': 'delivery_uncertain', 'report_id': report_id, 'verify_channel': 'slack'}
+        return _ack_locked(root, report_id, 'slack', result['ts'], now)
+
+
+def verify_slack(root, report_id, now=None):
+    import slack_bot
+    now = now or now_cn()
+    with lock(root):
+        record = read_record(root, report_id)
+        if record.get('slack_transport') != 'bot':
+            return {'status': 'legacy_connector_verification_required', 'report_id': report_id}
+        started = record['channels']['slack'].get('started_at', record['created_at'])
+        oldest = dt.datetime.fromisoformat(started).replace(tzinfo=dt.timezone(dt.timedelta(hours=8))).timestamp() - 60
+        result = slack_bot.verify(report_id, record['slack_target'], str(oldest))
+        if result['status'] == 'verified':
+            return _ack_locked(root, report_id, 'slack', result['receipt'], now)
+        # Keep uncertainty until the caller reviews negative delivery evidence.
+        return {'status': 'verified_absent' if result['status'] == 'absent' else 'needs_verification',
+                'report_id': report_id, 'verify_channel': 'slack'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -467,7 +510,7 @@ def main():
     run = commands.add_parser('run')
     run.add_argument('--force-report', action='store_true')
     run.add_argument('--review', action='store_true', help='manual post-market analysis, never a buy signal')
-    for name in ('ack', 'send-feishu', 'claim', 'release'):
+    for name in ('ack', 'send-feishu', 'send-slack', 'verify-slack', 'claim', 'release'):
         child = commands.add_parser(name)
         child.add_argument('--id', required=True)
         if name in ('ack', 'claim', 'release'):
@@ -487,6 +530,10 @@ def main():
             result = claim(root, args.id, args.channel)
         elif args.command == 'release':
             result = release(root, args.id, args.channel, args.receipt)
+        elif args.command == 'send-slack':
+            result = send_slack(root, args.id)
+        elif args.command == 'verify-slack':
+            result = verify_slack(root, args.id)
         else:
             result = send_feishu(root, args.id)
         print(json.dumps(result, ensure_ascii=False))

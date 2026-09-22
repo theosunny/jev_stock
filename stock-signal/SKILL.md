@@ -15,7 +15,8 @@ description: A股短线交易纪律监控、Jev 分析与飞书/Slack 通知。�
 每个有效的五分钟轮次由 `scripts/codex_cycle.py run` 取得最新行情、调用动态 `live_jev.py`，并产出完整但可直接发送的报告。它需要 `TYPESAFE_API_KEY`；未配置或 Jev 失败时新买入保持暂停。它只分析和生成提醒，**不调用旧 `monitor.py --mode intraday`，也不登记 paper 或真实买入**。
 
 - 飞书：报告有待发的 `feishu` 通道时，运行 `send-feishu --id REPORT_ID`；成功后脚本会确认该通道。不明结果保留 `sending` 并返回 `delivery_uncertain`，等待人工核查。
-- Slack：仅用 Codex Slack connector 发送。每轮先处理 `pending` 返回的 `needs_verification`/`unconfirmed`，按 `verify_channel` 在对应渠道回查，不能用 Slack 回执证明飞书送达；固定目标回查确认送达才 `ack`，确认没有消息才 `release`（最多两次），不能确认失败就停止。之后才 `claim --id REPORT_ID --channel slack`；仅在 `ready_to_send` 时发送。`sending` 时先读取或搜索含 `report_id` 的消息回查，确认后 `ack --id REPORT_ID --channel slack --receipt RECEIPT`，不盲目重发。
+- Slack：默认使用独立 Slack App Bot（本机 `.env` 的 `SLACK_BOT_TOKEN` / `SLACK_USER_ID`），运行 `send-slack --id REPORT_ID`；脚本建立机器人专属私信、记录目标、先 claim 后发送并确认。发送身份不是用户本人，手机通知仍受 Slack/系统设置影响。
+- 每轮先处理 `pending`：Slack Bot 不明送达运行 `verify-slack --id REPORT_ID`；已找到机器人发送的编号则自动确认。`verified_absent` 仅代表完整回查未找到，至少隔一轮再次回查一致后才 `release`，不能确认就保留阻塞。返回 `legacy_connector_verification_required` 的旧报告才使用旧 connector 目标回查；不得向旧的自发私信发送新报告。飞书只在飞书目标回查，绝不混用回执。
 - 状态保存在 `DATA_DIR/codex_monitor`，按通道独立记录送达，避免重复通知；没有新信号时保持安静。
 
 创建或修改自动化前，读取 [Codex 自动化操作说明](references/codex-automation.md)。任务时间可能超过五分钟；脚本负责交易日和时段守卫，不能承诺实时送达。
@@ -35,7 +36,7 @@ description: A股短线交易纪律监控、Jev 分析与飞书/Slack 通知。�
 2. **"分析/该不该买/选股"**：运行 Codex cycle，基于最新行情与 Jev 结果输出市场情绪、主线和每只观察股的明确动作及理由；报告发送前检查待发通道
 3. **改计划**：编辑 DATA_DIR/plan.json，改完 `--mode once` 验证
 4. **"我买了X"**：`--mode buy --code X`（价格省略=自动取实时价登记，报了价则 `--price Y`）；清仓 `--mode sell --code X`
-5. **测试旧推送**：`--mode test`（不会测试 Slack；Slack 需通过 Codex connector 实际送达并回查）
+5. **测试旧推送**：`--mode test`（不会测试 Slack；Slack 需通过独立 Bot 实际送达并回查）
 6. **"周一校准"**：读 DATA_DIR/monday_snapshot.txt（若存在）更新 Jev state 重跑
 
 ## 规则细节
