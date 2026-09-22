@@ -540,6 +540,13 @@ def mode_close():
     except Exception:
         pass
     lines.append("买入后: python3 monitor.py --mode buy --code 代码 --price 实际价")
+    try:  # 归档到 reviews/ 目录(跨agent的判断留痕)
+        rd = os.path.join(DATA, "reviews")
+        os.makedirs(rd, exist_ok=True)
+        with open(os.path.join(rd, today() + ".md"), "w", encoding="utf-8") as f:
+            f.write("# 收盘总结 " + today() + "\n\n" + "\n\n".join(l.lstrip("- ") for l in lines))
+    except Exception:
+        pass
     save_json(STATE_PATH, state)
     push_or_log("\n".join(lines))
 
