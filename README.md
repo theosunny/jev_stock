@@ -1,16 +1,18 @@
-# jev_stock — A股买点/平仓飞书提醒（Claude Code Skill）
+# jev_stock — A股买点/平仓提醒（Codex Skill）
 
-陈小群/小鳄鱼游资战法规则化监控：**MA5低吸区 / VWAP弱转强确认 / 止损 / 涨停与冲高回落兑现**，触发即推送到飞书私聊；内置 TypeSafe Jev 结构化判断做深度分析。
+陈小群/小鳄鱼游资战法规则化监控：**MA5低吸区 / VWAP弱转强确认 / 止损 / 涨停与冲高回落兑现**。Codex 每个有效五分钟轮次生成 Jev 完整判断，并分别推送到飞书和 Slack；不自动下单，也不登记 paper 委托。
 
 ## 快速开始（任何 Mac/Linux）
 
 ```bash
 git clone https://github.com/theosunny/jev_stock.git
 cd jev_stock && ./install.sh
-# 编辑 ~/.claude/skills/stock-signal/.env 填入配置
+# 编辑 ~/.codex/skills/stock-signal/.env 填入配置
 ```
 
-然后在 Claude Code 里说 **「看下股票」** 即可触发。
+需要保留 Claude 兼容安装时，执行 `./install.sh --target claude`。要将数据放在技能目录外，执行 `./install.sh --data-dir /absolute/path/to/stock-data`。
+
+然后在 Codex 里说 **「看下股票」** 即可触发。
 
 ## 依赖
 
@@ -20,20 +22,21 @@ cd jev_stock && ./install.sh
 | [lark-cli](https://feishu.cn)（登录后 `lark-cli auth status` 查 openId） | 飞书推送 | 推送功能需要 |
 | 微信通道（任选一）：Server酱 / PushPlus / 企业微信机器人 / WxPusher | 微信推送 | 可选，填 .env 即启用 |
 | TypeSafe API Key（.env） | Jev 深度判断 | 可选，规则监控不依赖 |
+| 已连接的 Codex Slack connector | Slack 推送 | Slack 通道需要；不保存 token 或目标用户资料到仓库 |
 | 腾讯行情 + 东财情绪/板块接口 | 数据源 | 免费，无需 key |
 
 ## 功能
 
 - **情绪与板块面板**：涨停家数/最高连板/炸板率/连板梯队、行业+概念涨幅榜、涨停板块分布（主线判定）、个股所属行业——每条推送自动附带
 - **仓位管理**：每条推送带仓位汇总（已用%/上限%），买入登记超限自动⚠️警告
-- **盘中自动监控**（配 cron，见 `stock-signal/cron.template`）：竞价概览 → 每5分钟规则检查（每票每类每天最多提醒1次）→ 收盘总结
+- **Codex 盘中自动化**：每五分钟获取行情、运行 Jev，并发送市场情绪、主线及每只观察股的动作与理由；每通道单独确认，未确认不会盲目重发
 - **可靠性保障**：9:25 心跳推送（收不到=系统挂了）、plan损坏告警、推送重试、cron覆盖调休周六、caffeinate 防睡眠
 - **消息面**：竞价含隔夜外盘（纳指/恒生/A50）与个股公告风险扫描
 - **弱转强双分支**：高开站稳VWAP 或 低开回升翻红
-- **执行层骨架（paper）**：买点触发即登记模拟委托（trade_log.jsonl）+ 三重熔断；真实下单需 miniQMT
+- **执行层骨架（paper）**：旧兼容链路才会登记模拟委托；Codex 自动化只分析和通知，真实下单需 miniQMT+明确启用
 - **确认加仓/大盘退潮预警**：持仓浮盈≥5%有量→金字塔加仓提醒（涨停日不加）；炸板率≥30%/高度板骤降→全组合减仓预警
 - **买入/清仓登记**：`python3 <skill>/scripts/monitor.py --mode buy --code sz002185 --price 17.80`（自动算止损价并推送回执）
-- **Claude 深度分析**：情绪周期定位、标的买点判定（`jev_analyze.py`，choice/noul/score 三类结构化问题）
+- **Jev 深度分析**：情绪周期定位、主线与标的动作判定（`jev_analyze.py`，choice/noul/score 三类结构化问题）
 - **数据目录可移植**：默认在 skill 目录；设 `STOCK_DATA_DIR` 或写 `scripts/.data_dir` 可把数据放到任意位置
 
 ## 微信推送配置（任选其一，填 .env 即启用，可与飞书同时收）
@@ -46,6 +49,12 @@ cd jev_stock && ./install.sh
 | **WxPusher** | https://wxpusher.zjiecode.com 注册应用 → `WXPUSHER_APP_TOKEN=` + `WXPUSHER_UID=` | 免费 | 微信公众号 |
 
 填好后验证：`python3 scripts/monitor.py --mode test`（显示 `已推送(feishu(bot)+serverchan)` 即多通道生效）
+
+## 从 cron 迁移到 Codex 自动化
+
+详细提示词和切换步骤见 [Codex 自动化说明](stock-signal/references/codex-automation.md)。先创建一个 **PAUSED** 的五分钟 Codex 任务，手动验证飞书和 Slack 都收到完整 Jev 报告并完成回查确认；随后备份并移除旧 stock-signal cron 条目，再将 Codex 任务设为 **ACTIVE**。需要回滚时，暂停 Codex 并恢复已备份的 cron 条目。
+
+`stock-signal/cron.template` 只保留为旧链路回滚入口，不能与 Codex 自动化并行运行。模板包含周六是为兼容调休工作日；实际是否开市仍由脚本交易日判断，调休周六不是 A 股开市信号。
 
 ## 交易计划（plan.json）
 

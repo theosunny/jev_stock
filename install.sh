@@ -1,26 +1,77 @@
 #!/usr/bin/env bash
-# 安装 stock-signal 到 ~/.claude/skills/（可重复执行，保留已有数据）
+# Install without overwriting a user's trading data or credentials.
 set -euo pipefail
-SRC="$(cd "$(dirname "$0")" && pwd)/stock-signal"
-DEST="$HOME/.claude/skills/stock-signal"
-mkdir -p "$HOME/.claude/skills"
-if [ -d "$DEST" ]; then
-  BAK="$DEST.bak-$(date +%Y%m%d%H%M%S)"
-  cp -R "$DEST" "$BAK"
-  echo "已备份现有安装 -> $BAK"
-  for f in .env plan.json .alert_state.json .data_dir monday_snapshot.txt jev_result.json; do
-    [ -f "$DEST/$f" ] && cp "$DEST/$f" "$SRC/scripts/" 2>/dev/null || true
-    [ -f "$DEST/$f" ] && cp "$DEST/$f" "$SRC/" 2>/dev/null || true
-  done
+
+usage() {
+  cat <<'EOF'
+Usage: ./install.sh [--target codex|claude] [--data-dir /absolute/path]
+
+Install stock-signal for Codex (the default) or Claude. --data-dir keeps all
+plan, credential, and runtime data outside the installed skill.
+EOF
+}
+
+target="codex"
+data_dir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --target)
+      [ "$#" -ge 2 ] || { echo "--target requires codex or claude" >&2; exit 2; }
+      target="$2"; shift 2 ;;
+    --data-dir)
+      [ "$#" -ge 2 ] || { echo "--data-dir requires an absolute path" >&2; exit 2; }
+      data_dir="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$target" in
+  codex) dest_base="$HOME/.codex/skills" ;;
+  claude) dest_base="$HOME/.claude/skills" ;;
+  *) echo "--target must be codex or claude" >&2; exit 2 ;;
+esac
+if [ -n "$data_dir" ]; then
+  case "$data_dir" in
+    /*) ;;
+    *) echo "--data-dir must be an absolute path" >&2; exit 2 ;;
+  esac
 fi
-rm -rf "$DEST" && cp -R "$SRC" "$DEST"
-cd "$DEST"
-[ -f .env ] || cp .env.example .env
-command -v python3 >/dev/null || { echo "缺少 python3"; exit 1; }
-python3 scripts/monitor.py --mode once || echo "（快照失败：请检查网络或 plan.json）"
-echo ""
-echo "安装完成: $DEST"
-echo "后续步骤:"
-echo "  1. 编辑 $DEST/.env 填入 LARK_USER_OPEN_ID（飞书推送，需安装 lark-cli 并 auth login）/ TYPESAFE_API_KEY（可选）"
-echo "  2. 重启 Claude Code 会话，说「看下股票」验证技能触发"
-echo "  3. 想要盘中自动提醒：参照 $DEST/cron.template 配置 crontab"
+
+src="$(cd "$(dirname "$0")" && pwd)/stock-signal"
+dest="$dest_base/stock-signal"
+mkdir -p "$dest_base"
+stage="$(mktemp -d "$dest_base/.stock-signal-stage.XXXXXX")"
+cleanup() { rm -rf "$stage"; }
+trap cleanup EXIT
+
+# Local files are overlaid in staging; they are never copied into this repo.
+cp -R "$src/." "$stage"
+if [ -d "$dest" ]; then
+  for file in .env plan.json .alert_state.json monday_snapshot.txt jev_result.json trade_log.jsonl; do
+    [ -f "$dest/$file" ] && cp -p "$dest/$file" "$stage/$file"
+  done
+  if [ -f "$dest/scripts/.data_dir" ]; then
+    cp -p "$dest/scripts/.data_dir" "$stage/scripts/.data_dir"
+  fi
+fi
+if [ -n "$data_dir" ]; then
+  mkdir -p "$data_dir"
+  printf '%s\n' "$data_dir" > "$stage/scripts/.data_dir"
+fi
+[ -f "$stage/.env" ] || cp "$stage/.env.example" "$stage/.env"
+
+backup=""
+if [ -d "$dest" ]; then
+  backup="$(mktemp -d "$dest_base/stock-signal.backup.XXXXXX")"
+  rmdir "$backup"
+  mv "$dest" "$backup"
+fi
+mv "$stage" "$dest"
+trap - EXIT
+
+echo "Installed stock-signal for $target: $dest"
+[ -n "$backup" ] && echo "Previous install backed up: $backup"
+echo "No market request or monitor run was performed during installation."
+echo "Configure $dest/.env, then create the Codex automation from $dest/references/codex-automation.md."
+echo "Keep it PAUSED until both Feishu and Slack delivery have been verified."

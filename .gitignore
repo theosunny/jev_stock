@@ -5,5 +5,9 @@ cron.log
 monday_snapshot.txt
 lark_qr.png
 jev_result.json
+codex_monitor/
+trade_log.jsonl
+.coverage
+coverage.xml
 __pycache__/
 *.pyc

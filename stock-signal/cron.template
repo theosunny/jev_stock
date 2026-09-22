@@ -1,5 +1,6 @@
-# 交易日定时监控（crontab -e 添加；把 <DATA> 换成数据目录、<PY> 换成 python3 绝对路径、<SKILL> 换成技能目录）
-# 1-6 含周六（A股调休上班日），脚本自带交易日守卫会自动跳过真休市日
+# 旧 Claude/cron 回滚入口，不能与 Codex 五分钟自动化并行启用。
+# 仅在已暂停 Codex 自动化后才可恢复此模板。把 <DATA>、<PY>、<SKILL> 换成实际绝对路径。
+# 1-6 仅覆盖调休周六的工作日调度；是否开市由脚本交易日守卫决定，周六调休本身不代表 A 股开市。
 10 9 * * 1-6 /usr/bin/caffeinate -i -t 22500 >/dev/null 2>&1 &
 25 9 * * 1-6 <PY> <SKILL>/scripts/monitor.py --mode heartbeat >> <DATA>/cron.log 2>&1
 16 9 * * 1-6 <PY> <SKILL>/scripts/monitor.py --mode auction >> <DATA>/cron.log 2>&1
