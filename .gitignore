@@ -6,8 +6,10 @@ monday_snapshot.txt
 lark_qr.png
 jev_result.json
 codex_monitor/
+reviews/
 trade_log.jsonl
 .coverage
 coverage.xml
+.pytest_cache/
 __pycache__/
 *.pyc

@@ -7,10 +7,10 @@
 ```bash
 git clone https://github.com/theosunny/jev_stock.git
 cd jev_stock && ./install.sh
-# 编辑 ~/.codex/skills/stock-signal/.env 填入配置
+# 编辑 ~/.codex/skills/stock-signal/.env 与 plan.json
 ```
 
-需要保留 Claude 兼容安装时，执行 `./install.sh --target claude`。要将数据放在技能目录外，执行 `./install.sh --data-dir /absolute/path/to/stock-data`。
+需要保留 Claude 兼容安装时，执行 `./install.sh --target claude`。要将数据放在技能目录外，执行 `./install.sh --data-dir /absolute/path/to/stock-data`；随后编辑该外置目录的 `.env` 与 `plan.json`，安装器不会覆盖既有凭证。
 
 然后在 Codex 里说 **「看下股票」** 即可触发。
 
@@ -21,7 +21,7 @@ cd jev_stock && ./install.sh
 | Python 3（仅标准库） | 全部脚本 | ✅ |
 | [lark-cli](https://feishu.cn)（登录后 `lark-cli auth status` 查 openId） | 飞书推送 | 推送功能需要 |
 | 微信通道（任选一）：Server酱 / PushPlus / 企业微信机器人 / WxPusher | 微信推送 | 可选，填 .env 即启用 |
-| TypeSafe API Key（.env） | Jev 深度判断 | 可选，规则监控不依赖 |
+| TypeSafe API Key（.env） | Codex 的完整 Jev 分析 | Codex 自动化需要；旧 monitor 规则提醒可不填 |
 | 已连接的 Codex Slack connector | Slack 推送 | Slack 通道需要；不保存 token 或目标用户资料到仓库 |
 | 腾讯行情 + 东财情绪/板块接口 | 数据源 | 免费，无需 key |
 
@@ -30,13 +30,13 @@ cd jev_stock && ./install.sh
 - **情绪与板块面板**：涨停家数/最高连板/炸板率/连板梯队、行业+概念涨幅榜、涨停板块分布（主线判定）、个股所属行业——每条推送自动附带
 - **仓位管理**：每条推送带仓位汇总（已用%/上限%），买入登记超限自动⚠️警告
 - **Codex 盘中自动化**：每五分钟获取行情、运行 Jev，并发送市场情绪、主线及每只观察股的动作与理由；每通道单独确认，未确认不会盲目重发
-- **可靠性保障**：9:25 心跳推送（收不到=系统挂了）、plan损坏告警、推送重试、cron覆盖调休周六、caffeinate 防睡眠
+- **可靠性保障**：9:25 强制心跳报告、plan 损坏告警、通道回查、9:10 `caffeinate` 本机防休眠辅助
 - **消息面**：竞价含隔夜外盘（纳指/恒生/A50）与个股公告风险扫描
 - **弱转强双分支**：高开站稳VWAP 或 低开回升翻红
 - **执行层骨架（paper）**：旧兼容链路才会登记模拟委托；Codex 自动化只分析和通知，真实下单需 miniQMT+明确启用
 - **确认加仓/大盘退潮预警**：持仓浮盈≥5%有量→金字塔加仓提醒（涨停日不加）；炸板率≥30%/高度板骤降→全组合减仓预警
 - **买入/清仓登记**：`python3 <skill>/scripts/monitor.py --mode buy --code sz002185 --price 17.80`（自动算止损价并推送回执）
-- **Jev 深度分析**：情绪周期定位、主线与标的动作判定（`jev_analyze.py`，choice/noul/score 三类结构化问题）
+- **Jev 深度分析**：动态 `live_jev.py` 产出情绪周期、主线与标的动作判定；`jev_analyze.py` 仅保留旧版手动分析兼容入口
 - **数据目录可移植**：默认在 skill 目录；设 `STOCK_DATA_DIR` 或写 `scripts/.data_dir` 可把数据放到任意位置
 
 ## 微信推送配置（任选其一，填 .env 即启用，可与飞书同时收）
@@ -52,13 +52,15 @@ cd jev_stock && ./install.sh
 
 ## 从 cron 迁移到 Codex 自动化
 
-详细提示词和切换步骤见 [Codex 自动化说明](stock-signal/references/codex-automation.md)。先创建一个 **PAUSED** 的五分钟 Codex 任务，手动验证飞书和 Slack 都收到完整 Jev 报告并完成回查确认；随后备份并移除旧 stock-signal cron 条目，再将 Codex 任务设为 **ACTIVE**。需要回滚时，暂停 Codex 并恢复已备份的 cron 条目。
+详细提示词和切换步骤见 [Codex 自动化说明](stock-signal/references/codex-automation.md)。先创建一个 **PAUSED** 的五分钟 Codex 任务，手动验证飞书和 Slack 都收到完整 Jev 报告并完成回查确认；随后备份并移除旧 `monitor.py` 和 `monday_nudge` cron 条目，再将 Codex 任务设为 **ACTIVE**。需要回滚时，暂停 Codex 并恢复已备份的监控条目。
 
-`stock-signal/cron.template` 只保留为旧链路回滚入口，不能与 Codex 自动化并行运行。模板包含周六是为兼容调休工作日；实际是否开市仍由脚本交易日判断，调休周六不是 A 股开市信号。
+`stock-signal/cron.template` 的监控行只保留为旧链路回滚入口，不能与 Codex 自动化并行运行。9:10 `caffeinate` 可保留为本机 OS 防休眠辅助；它不是监控调度，且 Codex 不能唤醒休眠中的 Mac。模板包含周六是为兼容调休工作日；实际是否开市仍由脚本交易日判断，调休周六不是 A 股开市信号。
+
+首次手动验证仅在竞价 9:15–9:30、盘中 9:30–11:30/13:00–15:00 或收盘 15:00–15:20 进行。报告超过 `expires_at` 后不发送，等待下一轮新报告。
 
 ## 交易计划（plan.json）
 
-watchlist 每项含：策略类型（ma5低吸 / 弱转强确认）、买入参数、仓位、止损百分比、兑现规则；买入登记后 `ref_price` 生效，持仓监控自动激活。
+watchlist 每项含：策略类型（ma5低吸 / 弱转强确认）、买入参数、仓位、止损百分比、兑现规则；买入登记后 `ref_price` 生效，持仓监控自动激活。当天买入的 A 股受 T+1 限制，止损提示会标记为下一交易日优先处理，不能承诺当日卖出。
 
 ## 风险声明
 

@@ -57,6 +57,29 @@ def _feishu(text):
                 return True, "feishu(%s)" % ident
     return False, "feishu失败"
 
+def send_feishu_once(text):
+    """Codex outbox delivery: one bot request, no fallback on uncertain outcome."""
+    _load_env()
+    uid = ENV.get("LARK_USER_OPEN_ID")
+    if not uid:
+        return None
+    binary = _lark_bin()
+    env = dict(os.environ, LARKSUITE_CLI_NO_UPDATE_NOTIFIER="1",
+               LARKSUITE_CLI_NO_SKILLS_NOTIFIER="1")
+    env["PATH"] = os.path.dirname(binary) + ":/opt/homebrew/bin:/usr/local/bin:" + env.get("PATH", "/usr/bin:/bin")
+    command = [binary, "im", "+messages-send", "--as", "bot", "--user-id", uid, "--markdown", text]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=45, env=env)
+        response = json.loads(result.stdout or "{}")
+        if result.returncode == 0 and response.get("ok") is True:
+            data = response.get("data") or {}
+            message_id = data.get("message_id") if isinstance(data, dict) else None
+            return True, message_id or "feishu_bot_confirmed"
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return False, "delivery_uncertain"
+
+
 def _serverchan(text):
     key = ENV.get("SERVERCHAN_SENDKEY", "")
     if not key:
