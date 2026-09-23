@@ -62,9 +62,76 @@ cd jev_stock && ./install.sh
 
 填好后验证：`python3 scripts/monitor.py --mode test`（显示 `已推送(feishu(bot)+serverchan)` 即多通道生效）
 
-## 从 cron 迁移到 Codex 自动化
+## 运行模式：Hybrid Monitoring（推荐）
+
+**核心理念：低成本定时脚本 + 按需 LLM 分析**
+
+系统采用混合架构，将监控与通知分离为两层：
+- **调度层**：轻量级 Python tick（`codex_tick.py`），每 5 分钟执行一次 `pending → verify → run → send` 完整周期，无需 LLM
+- **分析层**：`codex_cycle.py` 在 `run` 阶段按需调用 TypeSafe Jev（需 TYPESAFE_API_KEY）；数据异常时保持持仓监控，新买入自动暂停
+
+### 方式一：本机 watchdog（无 cron 环境）
+
+```bash
+# 数据目录与脚本路径已自动解析（datadir.py），也可显式设置
+export STOCK_DATA_DIR=/path/to/stock-data  # 可选
+nohup bash stock-signal/scripts/codex_watchdog.sh > /dev/null 2>&1 &
+```
+
+watchdog 循环将自动：
+- 每 5 分钟唤醒 `codex_tick.py`
+- 写入健康状态到 `$STOCK_DATA_DIR/logs/codex-health.json`
+- 日志保存在 `$STOCK_DATA_DIR/logs/codex-tick.log` / `.err`
+- watchdog 自身日志在 `codex-watchdog.log`
+
+停止：`kill $(cat $STOCK_DATA_DIR/logs/codex-watchdog.pid)`
+
+### 方式二：系统 cron（推荐）
+
+```cron
+# 交易日每 5 分钟
+*/5 9-15 * * 1-6 cd ~/.codex/skills/stock-signal && /usr/bin/python3 scripts/codex_tick.py
+```
+
+`codex_tick.py` 内置交易日判断，休市日/非交易时段自动跳过。
+
+### 健康监控
+
+脚本每轮写入 `$STOCK_DATA_DIR/logs/codex-health.json`：
+
+```json
+{
+  "ok": true,
+  "at": "2024-03-15 10:05:03 CST",
+  "run_status": "success",
+  "report_id": "20240315-intraday-1005-abc123",
+  "pending": {"20240315-intraday-1005-abc123": ["slack"]},
+  "alerts": [],
+  "unconfirmed": {}
+}
+```
+
+- `ok`: `false` 时表示硬失败（run_error / delivery_failed / slack_unconfirmed）
+- `alerts`: 触发的问题列表
+- **注意**：`feishu_not_configured` 不会标记为 `ok=false`（lark-cli 可选）
+
+### 可选：Codex Agent 健康巡检
+
+创建**低频**（如 30 分钟）Codex 任务，读取 `codex-health.json`，仅在 `ok=false` 时通知：
+
+```
+每 30 分钟读取 STOCK_DATA_DIR/logs/codex-health.json。
+ok=true → 静默；ok=false → 报告 alerts 并建议人工核查。
+不执行任何交易或重发报告；tick 脚本已负责正常循环。
+```
+
+这样 LLM 成本降至最低，仅用于异常提醒。
+
+## 旧链路：完整 LLM 调度（不推荐并行）
 
 详细提示词和切换步骤见 [Codex 自动化说明](stock-signal/references/codex-automation.md)。先创建一个 **PAUSED** 的五分钟 Codex 任务，手动验证飞书和 Slack 都收到完整 Jev 报告并完成回查确认；随后备份并移除旧 `monitor.py` 和 `monday_nudge` cron 条目，再将 Codex 任务设为 **ACTIVE**。需要回滚时，暂停 Codex 并恢复已备份的监控条目。
+
+**重要**：`codex_tick.py` / `codex_watchdog.sh` 与完整 Codex 自动化**不能并行运行**——它们都会调用同一个 `codex_cycle.py` 并争抢 claim/ack 锁。选择其一即可。
 
 `stock-signal/cron.template` 的监控行只保留为旧链路回滚入口，不能与 Codex 自动化并行运行。9:10 `caffeinate` 可保留为本机 OS 防休眠辅助；它不是监控调度，且 Codex 不能唤醒休眠中的 Mac。模板包含周六是为兼容调休工作日；实际是否开市仍由脚本交易日判断，调休周六不是 A 股开市信号。
 

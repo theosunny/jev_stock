@@ -1,5 +1,13 @@
 # Codex 五分钟自动化
 
+**推荐方式**：使用低成本 hybrid monitoring（`codex_tick.py` + `codex_watchdog.sh`），每 5 分钟执行 `pending → verify → run → send` 周期，无需 LLM 调度开销。仓库 README 有详细设置说明。
+
+**旧方式**（不推荐并行）：完整 Codex Agent 五分钟任务，每轮都消耗 LLM token。两种方式不可同时运行，会争抢 `codex_cycle.py` 的 claim/ack 锁。
+
+---
+
+## 完整 Codex Agent 设置（高成本）
+
 安装后，确认 `SKILL_DIR`、`DATA_DIR` 与有效的 `TYPESAFE_API_KEY`，并将任务设为 **PAUSED**。首次手动验证只在有效窗口进行：竞价 9:15–9:30、盘中 9:30–11:30 或 13:00–15:00、收盘 15:00–15:20。自动化提示应要求 Codex 执行：
 
 ```text

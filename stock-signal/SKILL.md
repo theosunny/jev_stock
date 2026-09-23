@@ -14,6 +14,8 @@ description: A股短线交易纪律监控、Jev 分析与飞书/Slack 通知。�
 
 每个有效的五分钟轮次由 `scripts/codex_cycle.py run` 取得最新行情、调用动态 `live_jev.py`，并产出完整但可直接发送的报告。它需要 `TYPESAFE_API_KEY`；未配置或 Jev 失败时新买入保持暂停。它只分析和生成提醒，**不调用旧 `monitor.py --mode intraday`，也不登记 paper 或真实买入**。
 
+**调度方式**：推荐使用轻量级 `codex_tick.py` + `codex_watchdog.sh`（详见仓库 README），无需每轮 LLM 开销；可选完整 Codex Agent 五分钟任务（高成本）。两者不可并行运行。
+
 - 飞书：报告有待发的 `feishu` 通道时，运行 `send-feishu --id REPORT_ID`；成功后脚本会确认该通道。不明结果保留 `sending` 并返回 `delivery_uncertain`，等待人工核查。
 - Slack：默认使用独立 Slack App Bot（本机 `.env` 的 `SLACK_BOT_TOKEN` / `SLACK_USER_ID`），运行 `send-slack --id REPORT_ID`；脚本建立机器人专属私信、记录目标、先 claim 后发送并确认。发送身份不是用户本人，手机通知仍受 Slack/系统设置影响。
 - 每轮先处理 `pending`：Slack Bot 不明送达运行 `verify-slack --id REPORT_ID`；已找到机器人发送的编号则自动确认。`verified_absent` 仅代表完整回查未找到，至少隔一轮再次回查一致后才 `release`，不能确认就保留阻塞。返回 `legacy_connector_verification_required` 的旧报告才使用旧 connector 目标回查；不得向旧的自发私信发送新报告。飞书只在飞书目标回查，绝不混用回执。
