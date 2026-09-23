@@ -30,6 +30,11 @@ def fetch_quotes(codes):
             "vwap": (round(float(f[37]) * 100 / float(f[36]), 3)
                      if f[36] and float(f[36]) > 0 and f[37] else None),
             "volume": float(f[36]) if f[36] else 0.0,
+            # Tencent fields 9/10 are the current best buy price/quantity.
+            # This is a point-in-time order-book observation only: it cannot
+            # prove a user's queue position, later cancellations, or fills.
+            "bid1_price": float(f[9]) if f[9] else None,
+            "bid1_volume": float(f[10]) if f[10] else None,
             "time": f[30],
         }
     return out

@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import live_analysis
+import quotes
 
 
 NOW = dt.datetime(2026, 9, 22, 10, 30)
@@ -99,6 +100,14 @@ def test_pool_rejects_empty_dt_when_total_is_nonzero(monkeypatch):
         live_analysis._pool("DT", "20260922")
 
 
+def test_limit_pool_rejects_zero_fund_or_amount_evidence():
+    row = {"c": "000002", "m": 0, "n": "测试", "hybk": "医药", "lbc": 1, "zbc": 0,
+           "fbt": 93100, "lbt": 93100, "fund": 0, "amount": 100, "zttj": {"days": 1, "ct": 1}}
+    warnings = []
+    assert live_analysis._normalise_limit_pool([row], warnings, NOW) == []
+    assert warnings
+
+
 def test_previous_emotion_keeps_all_leaders_for_sector_counts(monkeypatch):
     leaders = [{"hybk": "房地产服务"}] * 10 + [{"hybk": "房地产服务"}] * 2
     def fake_emotion(date):
@@ -124,12 +133,177 @@ def test_collect_snapshot_fails_closed_on_emotion_error(monkeypatch):
     assert raised.value.partial_snapshot["emotion"] == {}
 
 
-def test_limit_up_stock_is_never_buy_candidate():
+def test_limit_up_watchlist_stock_without_board_evidence_is_not_buy_candidate():
     s = snapshot(quotes={"sz000001": quote(price=10.78, limit_up=10.78)})
     result = live_analysis.evaluate(s, plan())
     assert result["buy_allowed"] is True
     assert result["stocks"][0]["action"] == "观察"
     assert "涨停" in result["stocks"][0]["reason"]
+
+
+def test_continuously_sealed_limit_up_can_be_board_entry_candidate_with_verifiable_bid():
+    """A sealed leader is eligible only after live bid and pool evidence agree.
+
+    This remains a candidate for Jev and manual order-book review, never an order.
+    """
+    board = {
+        "code": "sz000002", "name": "核心股", "industry": "医药",
+        "lbc": 3, "zbc": 0, "fbt": 93100, "lbt": 93100,
+        "fund": 1000000, "amount": 100000000, "zttj": {"days": 3, "ct": 3},
+    }
+    q = quote("20260922102930", price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=5000)
+    previous_q = quote("20260922102430", price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=5000)
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00",
+                 board_quotes={"sz000002": q}, previous_board_quotes={"sz000002": previous_q})
+    result = live_analysis.evaluate(s, p)
+    candidate = next(item for item in result["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "买入候选"
+    assert candidate["entry_type"] == "排板候选"
+    assert "人工盘口复核" in candidate["reason"]
+
+
+def test_limit_up_without_live_sealed_bid_stays_observation():
+    board = {
+        "code": "sz000002", "name": "核心股", "industry": "医药",
+        "lbc": 3, "zbc": 0, "fbt": 93100, "lbt": 93100,
+        "fund": 1000000, "amount": 100000000, "zttj": {"days": 3, "ct": 3},
+    }
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00",
+                 board_quotes={"sz000002": quote(price=10.78, limit_up=10.78)},
+                 previous_board_quotes={"sz000002": quote(price=10.78, limit_up=10.78)})
+    result = live_analysis.evaluate(s, p)
+    candidate = next(item for item in result["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert "封单" in candidate["reason"]
+
+
+def test_new_pool_stock_is_research_only_and_needs_prior_poll_evidence():
+    board = {
+        "code": "sz000002", "name": "新发现", "industry": "医药",
+        "lbc": 2, "zbc": 0, "fbt": 93100, "lbt": 93100,
+        "fund": 1000000, "amount": 100000000, "zttj": {"days": 2, "ct": 2},
+    }
+    q = quote(price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=5000)
+    result = live_analysis.evaluate(snapshot(limit_pool=[board], board_quotes={"sz000002": q}), plan())
+    candidate = next(item for item in result["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert candidate["research_only"] is True
+    assert candidate["entry_type"] is None
+    assert "未配置正式计划仓位" in candidate["reason"]
+
+
+def test_planned_board_without_previous_poll_is_observation():
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 93100, "lbt": 93100, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    q = quote(price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    candidate = next(item for item in live_analysis.evaluate(
+        snapshot(limit_pool=[board], board_quotes={"sz000002": q}), p)["stocks"]
+        if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert "上一成功轮次" in candidate["reason"]
+
+
+def test_board_hard_risk_and_stock_pause_cannot_be_bypassed():
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 93100, "lbt": 93100, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    q = quote(price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": False, "buy_size_pct": 5})
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00", board_quotes={"sz000002": q},
+                 previous_board_quotes={"sz000002": q},
+                 emotion={"date": "20260922", "zt": 20, "zb": 10, "dt": 1, "zb_rate": 33.3, "max_lb": 4})
+    candidate = next(item for item in live_analysis.evaluate(s, p)["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "暂停买入"
+    assert "个股买入已暂停" in candidate["reason"]
+
+
+def test_board_candidate_fails_closed_when_seal_time_is_after_snapshot():
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 93100, "lbt": 103100, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    q = quote(price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    s = snapshot(as_of="2026-09-22T10:30:00", limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00",
+                 board_quotes={"sz000002": q}, previous_board_quotes={"sz000002": q})
+    candidate = next(item for item in live_analysis.evaluate(s, p)["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert "最后封板时间字段无效" in candidate["reason"]
+
+
+def test_board_candidate_requires_timestamped_previous_snapshot_and_valid_clock():
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 99699, "lbt": 99699, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    q = quote(price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], board_quotes={"sz000002": q},
+                 previous_board_quotes={"sz000002": q})
+    candidate = next(item for item in live_analysis.evaluate(s, p)["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert "时间字段无效" in candidate["reason"]
+
+
+@pytest.mark.parametrize("current_time, previous_time", [
+    ("20260922102930", "20260922102930"),  # evidence was reused
+    ("20260922103100", "20260922102430"),  # current quote is from the future
+    ("20260922103230", "20260922102430"),  # materially future quote
+])
+def test_board_candidate_rejects_reused_or_future_quote_evidence(current_time, previous_time):
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 93100, "lbt": 93100, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    current = quote(current_time, price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    previous = quote(previous_time, price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00",
+                 board_quotes={"sz000002": current}, previous_board_quotes={"sz000002": previous})
+    candidate = next(item for item in live_analysis.evaluate(s, p)["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "观察"
+    assert any("报价时间" in item or "先后顺序" in item for item in candidate["missing_confirmation"])
+
+
+def test_board_allows_only_five_seconds_of_current_quote_clock_skew():
+    board = {"code": "sz000002", "name": "核心股", "industry": "医药", "lbc": 3, "zbc": 0,
+             "fbt": 93100, "lbt": 93100, "fund": 1000000, "amount": 100000000,
+             "zttj": {"days": 3, "ct": 3}}
+    p = plan()
+    p["watchlist"].append({"code": "sz000002", "name": "核心股", "enabled": True,
+                           "buy_enabled": True, "buy_size_pct": 5})
+    current = quote("20260922103005", price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    previous = quote("20260922102430", price=10.78, limit_up=10.78, bid1_price=10.78, bid1_volume=1000)
+    s = snapshot(limit_pool=[board], previous_limit_pool=[board], previous_board_as_of="2026-09-22T10:25:00",
+                 board_quotes={"sz000002": current}, previous_board_quotes={"sz000002": previous})
+    candidate = next(item for item in live_analysis.evaluate(s, p)["stocks"] if item["code"] == "sz000002")
+    assert candidate["action"] == "买入候选"
+
+
+def test_tencent_bid_one_is_optional_and_parsed_when_present(monkeypatch):
+    fields = [""] * 49
+    fields[1], fields[2], fields[3], fields[4], fields[5] = "测试", "000001", "10", "9.8", "9.9"
+    fields[9], fields[10], fields[30], fields[32], fields[33], fields[34] = "10.78", "1234", "20260922103000", "2", "10.2", "9.7"
+    fields[36], fields[37], fields[47], fields[48] = "1000", "10000", "10.78", "8.82"
+    monkeypatch.setattr(quotes, "_get", lambda _url: ('v_sz000001="' + "~".join(fields) + '";').encode("gbk"))
+    parsed = quotes.fetch_quotes(["sz000001"])["sz000001"]
+    assert parsed["bid1_price"] == 10.78
+    assert parsed["bid1_volume"] == 1234.0
 
 
 def test_individual_pause_prevents_buy():

@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import datadir
 import live_jev
+from report_sections import purchase_section, history_coverage, backtest_section
 
 CHANNELS = ('feishu', 'slack')
 
@@ -250,18 +251,31 @@ def combine(decision, jev, error):
         item['jev_reason'] = answers.get('reason_' + stock['code'], {}).get('choice', '数据不足')
         if stock['action'] == '买入候选' and (error or opinion != '买入候选'):
             item.update(action='暂停买入' if error else '观察', reason=stock['reason'] + '；Jev未确认买入候选')
+        if item['action'] == '买入候选' and stock.get('entry_type'):
+            mainline = answers.get('mainline', {}).get('choice', '')
+            industry = stock.get('industry') or ''
+            aligned = (isinstance(mainline, str) and isinstance(industry, str)
+                       and len(mainline) >= 3 and len(industry) >= 3
+                       and (mainline.startswith(industry) or industry.startswith(mainline)))
+            core = answers.get('core_' + stock['code'], {}).get('choice')
+            match = answers.get('alignment_' + stock['code'], {}).get('choice')
+            market = answers.get('market', {}).get('choice')
+            if (not aligned or core != '主线核心' or match != '匹配主线'
+                    or market not in ('回暖', '发酵', '分歧')):
+                item.update(action='观察', reason=item['reason'] + '；Jev未同时确认主线匹配、核心地位与情绪条件')
         stocks.append(item)
     reasons = list(decision['risk_reasons']) + (['Jev或数据异常，暂停新买入'] if error else [])
     return {**decision, 'buy_allowed': decision['buy_allowed'] and not error, 'risk_reasons': reasons, 'stocks': stocks}
 
 
-def make_message(report_id, snapshot, decision, jev, status, session_name):
+def make_message(report_id, snapshot, decision, jev, status, session_name, coverage=None):
     em = snapshot.get('emotion', {})
     answers = jev.get('answers', {}) if jev else {}
     market = answers.get('market', {}).get('choice', '数据不足')
     mainline = answers.get('mainline', {}).get('choice', '无明确主线')
     lines = ['**A股%s分析 | %s**' % ({'heartbeat': '心跳', 'auction': '竞价', 'close': '收盘', 'intraday': '盘中'}[session_name], snapshot['as_of']),
              '报告编号: ' + report_id,
+             '**一、市场分析**',
              'Jev: %s；观察主线: %s；模型: %s' % (market, mainline, (jev or {}).get('model', '本轮不可用')),
              '硬风控: ' + ('允许进一步核对个股候选，非下单指令' if decision['buy_allowed'] else '暂停新开仓'),
              '风险依据: ' + ('；'.join(decision['risk_reasons']) or '本轮未触发市场级闸门')]
@@ -278,9 +292,8 @@ def make_message(report_id, snapshot, decision, jev, status, session_name):
     for stock in decision['stocks']:
         lines.append('- %s %s: %s | %s\n  %s\n  Jev: %s / %s' % (
             stock['name'], stock['code'], stock.get('price', '无行情'), stock['action'], stock['reason'], stock['jev_action'], stock['jev_reason']))
-        if stock.get('budget'):
-            lines.append('  计划参考: %s%% / 约%s元 / %s股；%s（非下单指令）' % (
-                stock['size_pct'], stock['budget'], stock['shares'], stock['buy_reference']))
+        if stock.get('entry_type'):
+            lines.append('  形态证据: ' + stock['entry_type'].removesuffix('候选') + '；是否建议参与见买入建议栏')
         if stock.get('notice_risks'):
             lines.append('  公告风险关键词: ' + '；'.join(stock['notice_risks'])[:180])
     if session_name in ('auction', 'heartbeat') and snapshot.get('overnight'):
@@ -293,6 +306,8 @@ def make_message(report_id, snapshot, decision, jev, status, session_name):
         lines.append('数据提示: ' + '；'.join(snapshot['warnings'])[:250])
     if status == 'error':
         lines.append('本轮分析未完整成功，买入保持暂停；请查看本地报告error_type。')
+    lines += purchase_section(decision, snapshot['as_of'], status, session_name)
+    lines += backtest_section(coverage)
     lines += ['\n规则：陈小群主线龙头、买分歧卖一致；小鳄鱼仓位优先、弱转强确认。',
               '首测试错0.5成、单票不超过2成；-6%触发止损提醒，须核实实际成本、T+1可卖数量及流动性。',
               '仅分析提醒，不自动买卖或登记持仓。来源：腾讯行情、东方财富情绪池/快讯；原始快照及Jev结果保存在本地报告。',
@@ -305,6 +320,9 @@ def enrich(decision, snapshot, plan):
     configured = {s['code']: s for s in plan['watchlist']}
     stocks = []
     for stock in decision['stocks']:
+        if stock.get('research_only') or stock['code'] not in configured:
+            stocks.append({**stock, 'budget': 0, 'shares': 0, 'buy_reference': '研究观察：未配置交易仓位'})
+            continue
         config = configured.get(stock['code'], {})
         pct = config.get('buy_size_pct', 5)
         budget = round(capital * pct / 100, 2)
@@ -314,6 +332,8 @@ def enrich(decision, snapshot, plan):
         if config.get('buy_anchor') == 'ma5' and ma5:
             band = config.get('buy_band_pct', 1) / 100
             reference = 'MA5参考区间%.2f–%.2f' % (ma5 * (1-band), ma5 * (1+band))
+        if stock.get('entry_type'):
+            reference = stock['entry_type'] + '：以当日涨停价为参考，先核对即时盘口、排队和撤单风险；不保证成交'
         stocks.append({**stock, 'size_pct': pct, 'budget': budget, 'shares': int(budget // (price * 100)) * 100 if price else 0,
                        'buy_reference': reference, 'notice_risks': snapshot.get('announcements', {}).get(stock['code'], {}).get('risk', [])})
     return {**decision, 'stocks': stocks, 'position': {'capital': capital, 'cap_pct': plan.get('总仓位上限pct', 30),
@@ -325,6 +345,27 @@ def failed_decision(plan):
             'stocks': [{'code': s['code'], 'name': s.get('name', s['code']),
                         'action': '暂停买入', 'reason': '规则计算异常，不能确认交易条件'}
                        for s in plan['watchlist'] if s.get('enabled', True)]}
+
+
+def previous_board_evidence(root, state, now):
+    """Use only the immediately preceding successful, recent same-day snapshot."""
+    empty = {'previous_limit_pool': [], 'previous_board_quotes': {}, 'previous_board_as_of': None}
+    latest = state.get('latest_id')
+    if not latest:
+        return empty
+    record = read_record(root, latest)
+    if record.get('status') != 'success':
+        return empty
+    previous = record.get('snapshot') or {}
+    try:
+        at = dt.datetime.fromisoformat(previous['as_of'])
+        recent = at.date() == now.date() and 0 < (now - at).total_seconds() <= 600
+    except (KeyError, TypeError, ValueError):
+        return empty
+    if not recent or not isinstance(previous.get('limit_pool'), list):
+        return empty
+    return {'previous_limit_pool': previous['limit_pool'], 'previous_board_as_of': at.isoformat(),
+            'previous_board_quotes': {**previous.get('quotes', {}), **previous.get('board_quotes', {})}}
 
 
 def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
@@ -365,7 +406,8 @@ def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
         state = {**state, 'reentry_required': legacy_ebb,
                  'ebb_baseline': {'zt': risk_em.get('zt'),
                                   'zb_rate': risk_em.get('zb_rate')} if legacy_ebb else {}}
-    snapshot = {**snapshot, 'reentry_required': bool(state.get('reentry_required'))}
+    snapshot = {**snapshot, **previous_board_evidence(root, state, now),
+                'reentry_required': bool(state.get('reentry_required'))}
     try:
         decision = evaluator(snapshot, plan)
     except Exception as exc:
@@ -404,13 +446,14 @@ def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
                     'stocks': [{**s, 'action': '观察', 'reason': s['reason'] + '；非连续交易时段'} if s['action'] == '买入候选' else s for s in decision['stocks']]}
     status = 'error' if error else 'success'
     answers = (jev or {}).get('answers', {})
-    fingerprint = hashlib.sha256(json.dumps([now.strftime('%Y-%m-%d'), active, status, decision['buy_allowed'],
-        [(s['code'], s['action'], s['jev_action'], s['jev_reason']) for s in decision['stocks']],
+    fingerprint = hashlib.sha256(json.dumps(['analysis-purchase-validation-v1', now.strftime('%Y-%m-%d'), active, status, decision['buy_allowed'],
+        [(s['code'], s['action'], s['jev_action'], s['jev_reason'], s.get('entry_type')) for s in decision['stocks']],
         answers.get('market', {}).get('choice'), answers.get('mainline', {}).get('choice')], ensure_ascii=False).encode()).hexdigest()
     channels = {name: {'status': 'blocked' if name in state.get('unconfirmed', {}) else
         ('pending' if force_report or active == 'heartbeat' or state.get('delivered', {}).get(name) != fingerprint else 'unchanged')} for name in CHANNELS}
     expiry = now + dt.timedelta(minutes=3) if any(s['action'] == '买入候选' for s in decision['stocks']) else max(now + dt.timedelta(minutes=30), now.replace(hour=15, minute=30, second=0))
-    message = make_message(report_id, snapshot, decision, jev, status, active)
+    coverage = history_coverage(root, now)
+    message = make_message(report_id, snapshot, decision, jev, status, active, coverage)
     message_path = path.with_suffix('.md')
     message_path.parent.mkdir(parents=True, exist_ok=True)
     message_path.parent.chmod(0o700)
@@ -418,6 +461,7 @@ def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
     message_path.chmod(0o600)
     record = {'report_id': report_id, 'status': status, 'created_at': now.isoformat(), 'expires_at': expiry.isoformat(),
               'snapshot': snapshot, 'decision': decision, 'jev': jev, 'error_type': error, 'fingerprint': fingerprint,
+              'backtest_validation': coverage, 'report_format': 'analysis-purchase-validation-v1',
               'channels': channels, 'message': message, 'message_path': str(message_path), 'report_path': str(path)}
     write(path, record)
     write(state_path, {**state, 'latest_id': report_id, 'last_run': now.isoformat(),
