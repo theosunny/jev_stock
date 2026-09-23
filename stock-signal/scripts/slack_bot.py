@@ -86,7 +86,13 @@ def send_once(text, channel=None):
     """Authenticate then send exactly one bot message; never retry or fall back."""
     if not isinstance(text, str) or len(text) > MAX_MESSAGE_CHARS:
         return {"ok": False, "channel": None, "ts": None, "error": "message_too_long"}
-    config()  # Preserve a distinct configuration failure for the outbox runner.
+    credentials = config()  # Preserve a distinct configuration failure for the outbox runner.
+    # Always mention the configured user so mobile "mentions" prefs can fire.
+    mention = "<@" + credentials["user_id"] + ">"
+    if mention not in text:
+        text = mention + "\n" + text
+    if len(text) > MAX_MESSAGE_CHARS:
+        return {"ok": False, "channel": None, "ts": None, "error": "message_too_long"}
     if not _bot_user_id():
         return {"ok": False, "channel": None, "ts": None, "error": "slack_auth_failed"}
     try:
@@ -96,7 +102,8 @@ def send_once(text, channel=None):
     if not isinstance(channel, str) or not _CHANNEL_ID.fullmatch(channel):
         return {"ok": False, "channel": None, "ts": None, "error": "slack_channel_invalid"}
     result = api("chat.postMessage", {
-        "channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False,
+        "channel": channel, "text": text, "link_names": True,
+        "unfurl_links": False, "unfurl_media": False,
     })
     timestamp = result.get("ts") if result.get("ok") is True else None
     response_channel = result.get("channel") if result.get("ok") is True else None
