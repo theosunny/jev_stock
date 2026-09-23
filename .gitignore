@@ -13,3 +13,6 @@ coverage.xml
 .pytest_cache/
 __pycache__/
 *.pyc
+
+# Independent local assistant state (never commit personal records)
+assistant/*.sqlite3*

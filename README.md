@@ -2,6 +2,18 @@
 
 陈小群/小鳄鱼游资战法规则化监控：**MA5低吸区 / VWAP弱转强确认 / 止损 / 涨停与冲高回落兑现**。Codex 每个有效五分钟轮次生成 Jev 完整判断，并分别推送到飞书和 Slack；不自动下单，也不登记 paper 委托。
 
+## 个人交易助手界面
+
+已新增独立本机界面，按已确认的四页原型实现大盘、滚动选股、个股行情/财报与推荐验证。使用现有研究归档，不改变盘中监控、交易计划或真实持仓。
+
+```sh
+STOCK_DATA_DIR=/Users/habitat/ai_project/stock_anaylze /Users/habitat/miniforge3/bin/python3 -m assistant.server
+```
+
+打开 [个人交易助手](http://127.0.0.1:8766)。界面定期读取现有归档；新正式推荐进入独立 SQLite 留档，历史不删除。独立模拟操作仅在验证页手动触发，国金证券适配边界默认关闭。收益回测尚未完成，页面不会展示虚构绩效。
+
+设计、数据边界与验证说明见 [assistant/README.md](assistant/README.md)。不需要安装新的生产依赖。
+
 ## 快速开始（任何 Mac/Linux）
 
 ```bash

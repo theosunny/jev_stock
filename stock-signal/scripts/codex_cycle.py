@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import datadir
 import live_jev
+import strategy_identity
 from report_sections import purchase_section, history_coverage, backtest_section
 
 CHANNELS = ('feishu', 'slack')
@@ -379,6 +380,20 @@ def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
         plan_error = type(exc).__name__
         plan = {'watchlist': []}
     digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()[:10]
+    # Provenance is calculated from the original, validated plan before any
+    # analysis-side enrichment. It never trusts a free-form plan strategy name.
+    # A missing local rule source is recorded as unavailable rather than
+    # changing the existing analysis or risk-gate behavior.
+    if plan_error:
+        strategy = None
+        strategy_provenance_error = plan_error
+    else:
+        try:
+            strategy = strategy_identity.strategy_identity(plan)
+            strategy_provenance_error = None
+        except strategy_identity.StrategyIdentityError as exc:
+            strategy = None
+            strategy_provenance_error = type(exc).__name__
     slot = now.strftime('%Y%m%d-') + active + '-%02d%02d' % (now.hour, now.minute // 5 * 5)
     if force_report:
         slot += '-' + now.strftime('%S%f')
@@ -462,6 +477,7 @@ def _run(root, now, force_report, collector, evaluator, analyzer, review=False):
     record = {'report_id': report_id, 'status': status, 'created_at': now.isoformat(), 'expires_at': expiry.isoformat(),
               'snapshot': snapshot, 'decision': decision, 'jev': jev, 'error_type': error, 'fingerprint': fingerprint,
               'backtest_validation': coverage, 'report_format': 'analysis-purchase-validation-v1',
+              'strategy': strategy, 'strategy_provenance_error': strategy_provenance_error,
               'channels': channels, 'message': message, 'message_path': str(message_path), 'report_path': str(path)}
     write(path, record)
     write(state_path, {**state, 'latest_id': report_id, 'last_run': now.isoformat(),
