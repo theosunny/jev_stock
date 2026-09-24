@@ -12,11 +12,15 @@ stock-signal/
 ├── cron.template       # 定时任务模板（1-6含调休周六）
 └── scripts/
     ├── datadir.py      # 数据目录解析: $STOCK_DATA_DIR → scripts/.data_dir → SKILL.md所在根目录
+    ├── codex_tick.py   # 低成本定时tick: pending→verify→run→send (无LLM开销)
+    ├── codex_watchdog.sh # 持续watchdog，每5分钟唤醒tick（无cron环境用）
+    ├── codex_cycle.py  # Codex轮次：run/pending/send-*/verify-* (包含Jev调用)
     ├── quotes.py       # 腾讯免费行情（实时+日K+VWAP分时均价+昨量）
     ├── market.py       # 东财免费：涨停/炸板/跌停池(情绪)、板块榜(clist限流自动切push2delay)、
     │                   #   板块涨停分布(主线判定)、个股行业、公告扫描、隔夜外盘、is_ebb退潮判定
     ├── monitor.py      # 规则引擎: test/once/auction/intraday/close/buy/sell/heartbeat
     ├── push.py         # 多通道: feishu(lark-cli bot优先) + Server酱/PushPlus/企微webhook/WxPusher
+    ├── slack_bot.py    # Slack Bot API封装：open_dm/send_once/verify (需SLACK_BOT_TOKEN)
     ├── execution.py    # paper模拟执行层 + 三重熔断(日亏2%/单票3次/白名单)；真实下单需miniQMT
     └── jev_analyze.py  # TypeSafe Jev 结构化判断（state内嵌，随行情更新）
 ```
