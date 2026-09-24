@@ -15,7 +15,7 @@ stock-signal/
     ├── codex_tick.py   # 低成本定时tick: pending→verify→run→send (无LLM开销)
     ├── codex_watchdog.sh # 持续watchdog，每5分钟唤醒tick（无cron环境用）
     ├── codex_cycle.py  # Codex轮次：run/pending/send-*/verify-* (包含Jev调用)
-    ├── quotes.py       # 腾讯免费行情（实时+日K+VWAP分时均价+昨量）
+    ├── quotes.py       # 多源免费行情（腾讯→东财自动切换，实时+日K+VWAP分时均价+昨量，支持竞价期）
     ├── market.py       # 东财免费：涨停/炸板/跌停池(情绪)、板块榜(clist限流自动切push2delay)、
     │                   #   板块涨停分布(主线判定)、个股行业、公告扫描、隔夜外盘、is_ebb退潮判定
     ├── monitor.py      # 规则引擎: test/once/auction/intraday/close/buy/sell/heartbeat

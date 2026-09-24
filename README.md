@@ -35,7 +35,7 @@ cd jev_stock && ./install.sh
 | 微信通道（任选一）：Server酱 / PushPlus / 企业微信机器人 / WxPusher | 微信推送 | 可选，填 .env 即启用 |
 | TypeSafe API Key（.env） | Codex 的完整 Jev 分析 | Codex 自动化需要；旧 monitor 规则提醒可不填 |
 | 已安装到工作区的 Slack App Bot | Slack 推送 | Slack 通道需要；本机 .env 配 SLACK_BOT_TOKEN / SLACK_USER_ID，不提交真实值 |
-| 腾讯行情 + 东财情绪/板块接口 | 数据源 | 免费，无需 key |
+| 腾讯行情 + 东财情绪/板块接口（行情自动多源切换） | 数据源 | 免费，无需 key |
 
 ## 功能
 
