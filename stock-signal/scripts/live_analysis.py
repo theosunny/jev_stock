@@ -90,6 +90,23 @@ def _quote_datetime(value):
         raise SnapshotError("invalid quote timestamp: %r" % (value,)) from exc
 
 
+def _is_auction_period(now):
+    """Check if now is in morning auction window (09:15-09:30 Asia/Shanghai)"""
+    import zoneinfo
+    try:
+        shanghai_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+        if now.tzinfo is None:
+            now_shanghai = now.replace(tzinfo=shanghai_tz)
+        else:
+            now_shanghai = now.astimezone(shanghai_tz)
+        time_only = now_shanghai.time()
+        return dt.time(9, 15) <= time_only < dt.time(9, 30)
+    except Exception:
+        # Fallback without timezone if zoneinfo fails
+        time_only = now.time()
+        return dt.time(9, 15) <= time_only < dt.time(9, 30)
+
+
 def _validate_quotes(result, codes, now):
     """Validate a required quote set; used strictly for the market indices."""
     quotes_by_code = {code: _validated_quote(code, result.get(code), now) for code in codes}
@@ -107,13 +124,37 @@ def _validated_quote(code, quote, now):
     if not isinstance(quote, dict):
         raise SnapshotError("missing quote: %s" % code)
     at = _quote_datetime(quote.get("time"))
-    for field in ("price", "prev_close", "open", "high", "low"):
+    is_auction = _is_auction_period(now)
+    
+    # Always require price and prev_close to be valid
+    for field in ("price", "prev_close"):
         try:
             value = float(quote[field])
             if not math.isfinite(value) or value <= 0:
                 raise ValueError
         except (KeyError, TypeError, ValueError) as exc:
             raise SnapshotError("invalid %s for %s" % (field, code)) from exc
+    
+    # During auction, allow open/high/low to be 0 (not yet published)
+    # Outside auction, require open/high/low > 0
+    for field in ("open", "high", "low"):
+        try:
+            value = float(quote[field])
+            if not math.isfinite(value):
+                raise ValueError("not finite")
+            # During auction, allow 0; outside auction, require > 0
+            if value <= 0 and not is_auction:
+                raise ValueError("requires > 0 outside auction")
+        except (KeyError, TypeError) as exc:
+            raise SnapshotError("invalid %s for %s%s" % (
+                field, code, " (auction: open not yet published)" if is_auction else "")) from exc
+        except ValueError as exc:
+            if is_auction and value == 0:
+                # Auction allows zero for open/high/low (not yet published)
+                continue
+            raise SnapshotError("invalid %s for %s%s" % (
+                field, code, " (auction: open not yet published)" if is_auction else "")) from exc
+    
     for field in ("pct", "volume", "vwap"):
         if quote.get(field) is None:
             continue

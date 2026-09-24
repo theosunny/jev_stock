@@ -387,3 +387,86 @@ def test_missing_industry_does_not_crash_reentry_confirmation():
 def test_postmarket_source_timestamp_still_represents_same_day_close():
     now = dt.datetime(2026, 9, 22, 16, 0)
     live_analysis._ensure_quote_fresh('sh000001', dt.datetime(2026, 9, 22, 15, 14), now)
+
+
+def test_auction_period_allows_zero_open_high_low_for_indices(monkeypatch):
+    """During auction (09:15-09:30), allow open/high/low=0 when price/prev_close are valid"""
+    auction_time = dt.datetime(2026, 9, 22, 9, 20)
+    def fetched(codes):
+        return {code: quote("20260922092000", price=3100.0, prev_close=3080.0, 
+                          open=0.0, high=0.0, low=0.0) for code in codes}
+    monkeypatch.setattr(live_analysis.quotes, "fetch_quotes", fetched)
+    emotion = snapshot()["emotion"]
+    leaders = [{"hybk": "医药"}] * 5
+    monkeypatch.setattr(live_analysis, "_emotion_for", lambda date: (emotion, leaders))
+    monkeypatch.setattr(live_analysis, "_previous_emotion", lambda date: (emotion, {"leaders": leaders}))
+    monkeypatch.setattr(live_analysis.market_news, "filter_news", lambda *args, **kwargs: [])
+    collected = live_analysis.collect_snapshot(plan(), auction_time)
+    assert "sh000001" in collected["quotes"]
+    assert collected["quotes"]["sh000001"]["price"] == 3100.0
+
+
+def test_non_auction_period_rejects_zero_open_for_indices(monkeypatch):
+    """Outside auction, open=0 should be rejected"""
+    regular_time = dt.datetime(2026, 9, 22, 10, 30)
+    def fetched(codes):
+        return {code: quote("20260922103000", price=3100.0, prev_close=3080.0,
+                          open=0.0, high=3120.0, low=3090.0) for code in codes}
+    monkeypatch.setattr(live_analysis.quotes, "fetch_quotes", fetched)
+    with pytest.raises(live_analysis.SnapshotError, match="invalid open"):
+        live_analysis.collect_snapshot(plan(), regular_time)
+
+
+def test_auction_period_stock_quote_with_zero_open(monkeypatch):
+    """Auction allows zero open/high/low for stocks too"""
+    auction_time = dt.datetime(2026, 9, 22, 9, 25)
+    def fetched(codes):
+        values = {code: quote("20260922092500", price=10.0 if code.startswith("sz") else 3100.0,
+                            prev_close=9.8 if code.startswith("sz") else 3080.0,
+                            open=0.0, high=0.0, low=0.0) for code in codes}
+        return values
+    emotion = snapshot()["emotion"]
+    leaders = [{"hybk": "医药"}] * 5
+    monkeypatch.setattr(live_analysis.quotes, "fetch_quotes", fetched)
+    monkeypatch.setattr(live_analysis, "_emotion_for", lambda date: (emotion, leaders))
+    monkeypatch.setattr(live_analysis, "_previous_emotion", lambda date: (emotion, {"leaders": leaders}))
+    monkeypatch.setattr(live_analysis.market_news, "filter_news", lambda *args, **kwargs: [])
+    collected = live_analysis.collect_snapshot(plan(), auction_time)
+    assert "sz000001" in collected["quotes"]
+    assert collected["quotes"]["sz000001"]["open"] == 0.0
+
+
+def test_multisource_fallback_eastmoney_fills_missing_codes(monkeypatch):
+    """When Tencent is missing a code, East Money should fill it"""
+    def mock_fetch_tencent(codes):
+        # Only return sh000001, missing sz000001
+        return {"sh000001": quote("20260922103000")}
+    
+    def mock_fetch_eastmoney(codes):
+        # Fill the missing sz000001
+        if "sz000001" in codes:
+            return {"sz000001": {**quote("20260922103000"), "source": "eastmoney"}}
+        return {}
+    
+    monkeypatch.setattr(quotes, "_fetch_tencent", mock_fetch_tencent)
+    monkeypatch.setattr(quotes, "_fetch_eastmoney", mock_fetch_eastmoney)
+    
+    result = quotes.fetch_quotes(["sh000001", "sz000001"])
+    assert "sh000001" in result
+    assert "sz000001" in result
+    assert result["sz000001"]["source"] == "eastmoney"
+
+
+def test_multisource_preserves_tencent_when_available(monkeypatch):
+    """Tencent quotes should be preferred when available"""
+    def mock_fetch_tencent(codes):
+        return {code: {**quote("20260922103000"), "source": "tencent"} for code in codes}
+    
+    def mock_fetch_eastmoney(codes):
+        return {}
+    
+    monkeypatch.setattr(quotes, "_fetch_tencent", mock_fetch_tencent)
+    monkeypatch.setattr(quotes, "_fetch_eastmoney", mock_fetch_eastmoney)
+    
+    result = quotes.fetch_quotes(["sh000001"])
+    assert result["sh000001"]["source"] == "tencent"

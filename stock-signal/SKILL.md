@@ -26,7 +26,7 @@ description: A股短线交易纪律监控、Jev 分析与飞书/Slack 通知。�
 ## 组件
 - `plan.json`（在 DATA_DIR）：标的、买卖规则、仓位、止损/兑现。用户买入后执行 `--mode buy` 登记
 - `monitor.py --mode test|once|auction|intraday|close|buy|sell` 是旧兼容链路。`buy`/`sell` 仍用于人工登记；它们会按旧推送设置发送，不属于 Codex 自动化。
-- `quotes.py` 腾讯免费行情（免key，含VWAP分时均价）；`push.py` 旧链路的 lark-cli/微信推送（.env 配 LARK_USER_OPEN_ID）
+- `quotes.py` 多源免费行情（腾讯→东财自动切换，免key，含VWAP分时均价，支持竞价期零开盘价验证）；`push.py` 旧链路的 lark-cli/微信推送（.env 配 LARK_USER_OPEN_ID）
 - `market.py` 东财免费情绪与板块（免key）：涨停/炸板/跌停池→涨停家数/最高连板/炸板率/连板梯队；行业+概念板块涨幅榜（clist限流自动切push2delay备用域名）；涨停板块分布（主线判定）；个股所属行业
 - 每条推送自动附带：情绪面板 + 板块热度 + 仓位汇总（已用%/上限%，超限⚠️）+ 当日/次日买点价格区间
 - `live_jev.py` 是 Codex 轮次的动态 Jev 结构化判断（需 TypeSafe Key）；报告必须含市场情绪、主线和每只观察股的动作与理由，不写成无关的研究长文。`jev_analyze.py` 仅保留为旧版手动分析兼容入口。
